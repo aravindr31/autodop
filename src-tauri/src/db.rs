@@ -154,6 +154,22 @@ fn setting(app: Option<&AppHandle>, key: &str) -> Option<String> {
     None
 }
 
+/// Copy every `.env` entry into the process environment, without clobbering a
+/// variable that is already set.
+///
+/// [`setting`] only *looks up* `.env` values, so anything read straight from
+/// `std::env` — `AUTODOP_PYTHON`, `AUTODOP_SCRAPER` — would otherwise ignore the
+/// file entirely and silently fall back to `python3` on `PATH`.
+pub fn hydrate_env(app: &AppHandle) {
+    for path in env_file_candidates(Some(app)) {
+        for (key, value) in parse_env_file(&path) {
+            if std::env::var_os(&key).is_none() {
+                std::env::set_var(key, value);
+            }
+        }
+    }
+}
+
 pub fn load_db_config(app: Option<&AppHandle>) -> Option<DbConfig> {
     let uri = setting(app, "MONGO_URI")?;
     Some(DbConfig {
@@ -315,7 +331,7 @@ pub struct DbList {
 #[derive(Debug, Deserialize)]
 pub struct InputEntry {
     pub id: String,
-    #[serde(default = "one")]
+    #[serde(default = "default_rebate")]
     pub rebate: i64,
 }
 
@@ -330,14 +346,16 @@ pub struct InputList {
     pub entries: Vec<InputEntry>,
 }
 
-fn one() -> i64 {
-    1
+/// Default rebate when a payload omits it: `0`, matching the Streamlit UI's
+/// `acc.get("Rebate", 0)`.
+fn default_rebate() -> i64 {
+    0
 }
 
 /// Map a `savedList` document onto the frontend list shape.
 ///
 /// Entries are `{id: ObjectId, rebate: int}`; a bare ObjectId is also accepted
-/// and treated as rebate 1.
+/// and treated as the default rebate.
 pub fn list_from_doc(doc: &Document) -> DbList {
     let entries = doc
         .get_array("accounts")
@@ -350,11 +368,11 @@ pub fn list_from_doc(doc: &Document) -> DbList {
                         rebate: entry
                             .get_i64("rebate")
                             .or_else(|_| entry.get_i32("rebate").map(i64::from))
-                            .unwrap_or(1),
+                            .unwrap_or(default_rebate()),
                     }),
                     Bson::ObjectId(oid) => Some(DbListEntry {
                         id: oid.to_hex(),
-                        rebate: 1,
+                        rebate: default_rebate(),
                     }),
                     _ => None,
                 })
@@ -684,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_rebate_to_one_and_tolerates_bare_ids() {
+    fn defaults_rebate_and_tolerates_bare_ids() {
         let oid = ObjectId::new();
         let mapped = list_from_doc(&doc! {
             "_id": ObjectId::new(),
@@ -692,7 +710,7 @@ mod tests {
             "accounts": [ { "id": oid }, Bson::ObjectId(oid) ],
         });
         assert_eq!(mapped.entries.len(), 2);
-        assert!(mapped.entries.iter().all(|entry| entry.rebate == 1));
+        assert!(mapped.entries.iter().all(|entry| entry.rebate == 0));
         assert_eq!(mapped.entries[1].id, oid.to_hex());
     }
 
@@ -716,8 +734,8 @@ mod tests {
         assert!(list.active);
         assert_eq!(list.entries.len(), 1);
         assert_eq!(
-            list.entries[0].rebate, 1,
-            "rebate defaults to 1 when omitted"
+            list.entries[0].rebate, 0,
+            "rebate defaults to 0 when omitted"
         );
     }
 }

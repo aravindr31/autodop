@@ -15,7 +15,7 @@ and driving the DOP portal with Selenium.
 | Node 20+ | builds the frontend |
 | Rust + Cargo | builds the desktop shell (`rustup` if missing) |
 | Python 3 | `scraper.py` runs as a local process |
-| `pip install selenium webdriver-manager` | what `scraper.py` imports |
+| selenium + webdriver-manager | what `scraper.py` imports — see [Python & Chrome](#python--chrome) |
 | Google Chrome | Selenium drives it |
 
 ## Run
@@ -32,14 +32,30 @@ Build a distributable:
 npm run build               # macOS: .app/.dmg   Windows: .msi/.exe
 ```
 
-## Generating a list
+## Generating lists
 
-**Lists** tab → expand a list → **Generate (DOP)**.
+Two ways in, both on the **Lists** tab:
 
-The button calls the Rust command `generate_lists`, which spawns
-`scraper.py <user> <pass> <lists_json>` with this list's account numbers and
-rebate values, streams the script's output back into the UI as it runs, and
-returns the parsed result array.
+- **Generate All Lists** — every non-empty list in a single run (the Streamlit
+  UI's headline action, `main.py:543`).
+- **Generate (DOP)** inside an expanded list — just that one.
+
+Either way it is a **single invocation**: the Rust command `generate_lists`
+spawns `scraper.py <user> <pass> <lists_json>`, where `lists_json` is an array of
+`{name, numbers, rebate}` — the same key names and argv order the Streamlit UI
+used (`main.py:557` → `run_scraper_script` → `subprocess.run`). `scraper.py`
+logs in once and then works through the lists in order; each list's result comes
+back in the parsed array.
+
+**Rebate.** `scraper.py:165` only *skips* the rebate step when the value is `1`
+(`if rebate_val != 1`); any other value is typed into `RD_INSTALLMENT_NO` and
+saved. The Streamlit UI read `acc.get("Rebate", 0)` and those documents carry no
+`Rebate` field, so **`0` is the default**; a list's stored rebate overrides it.
+
+Expand a list on the **Lists** tab to edit the rebate per account. It is stored
+against the account on that list, rides along with Generate, and survives a
+**Load lists** / **Save lists to Atlas** round trip — including `1`, which is a
+real value rather than "unset".
 
 ## Credentials
 
@@ -66,6 +82,48 @@ password is never sent to the webview** — it goes from Rust straight into
 | `AUTODOP_SCRAPER` | `<repo>/scraper.py` | path to the Selenium script |
 | `AUTODOP_PYTHON` | `python3` (mac) / `python` (win) | interpreter to launch it with |
 | `DOP_USERNAME` / `DOP_PASSWORD` | config file | portal credentials |
+
+## Python & Chrome
+
+`scraper.py` drives Chrome through Selenium, so the interpreter the app launches
+needs both `selenium` and `webdriver_manager` — and it is easy for that to be a
+*different* Python from the one in your shell. The app shows the one it will use
+in **Manage → DOP Credentials**. If it reports the bare `python3`, it came from
+`PATH` and probably has neither package (the symptom is Generate failing with
+*"Scraper produced no parseable result"* and no Chrome window).
+
+A venv wired up through `.env` keeps it deterministic:
+
+```bash
+python3 -m venv .venv-scraper
+.venv-scraper/bin/pip install selenium webdriver-manager
+```
+
+```bash
+# src-tauri/.env   (gitignored)
+AUTODOP_PYTHON=/absolute/path/to/.venv-scraper/bin/python3
+```
+
+`AUTODOP_PYTHON` and `AUTODOP_SCRAPER` are declared in `.env` too — at startup
+the app copies every `.env` entry into its process environment, so settings that
+are read straight from `std::env` work as well as the ones read through the
+config lookup.
+
+Chrome needs no manual driver: `webdriver_manager` fetches the matching
+ChromeDriver on first run and caches it under `~/.wdm`.
+
+## Logs
+
+Every Generate run writes a log file, because the progress area is cleared as
+soon as the window moves on.
+
+- **In the app** — a failed run shows the backend's log tail inline, with a
+  *Copy log* button and the full path. The scraper's `stderr` is streamed live as
+  well, so a Python traceback appears while it happens rather than only at the
+  end.
+- **On disk** — `~/Library/Logs/in.aravind.autodop/scraper-<timestamp>.log`
+  (`%LOCALAPPDATA%\in.aravind.autodop\logs` on Windows). One file per run,
+  timestamped, with the password redacted.
 
 ## Database (MongoDB Atlas)
 
@@ -107,7 +165,7 @@ List documents are `{_id, listName, active, accounts: [{id: ObjectId, rebate}]}`
   `listName` (local ids are UUIDs, so this is what updates the existing A–Z
   rows rather than inserting new ones).
 - `rebate` rides along per account, so **Generate (DOP)** sends the stored value
-  instead of assuming `1`.
+  when there is one and falls back to `0` — the Streamlit UI's default.
 
 Your 26 lists are currently **empty shells** — every one has `accounts: []`, so
 there is no membership or rebate data to import yet. `A` is the one flagged
@@ -194,6 +252,14 @@ credential stored long ago must keep working.
   Try a one-account list first.
 
 ## Troubleshooting
+
+**Generate fails with *"Scraper produced no parseable result"* and Chrome never
+opens.**
+
+That message means the Python process died before printing its result. The
+reason is in the log shown under the button. The usual cause is a missing
+import — `ModuleNotFoundError: No module named 'selenium'` — from the
+interpreter the app picked; see [Python & Chrome](#python--chrome).
 
 **`tauri build` fails at `bundle_dmg.sh`.**
 

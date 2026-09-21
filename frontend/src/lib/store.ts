@@ -47,6 +47,8 @@ export interface AppState {
   setActiveList: (id: string) => void;
   addToActive: (accountId: string) => void;
   removeFromList: (listId: string, accountId: string) => void;
+  /** Set one account's rebate (RD installment no.) within a list. */
+  setRebate: (listId: string, accountId: string, rebate: number) => void;
   clearList: (listId: string) => void;
   setSubmitEndpoint: (endpoint: string) => void;
 
@@ -253,6 +255,16 @@ export const useStore = create<AppState>()((set, get) => ({
   clearList: (listId) => {
     set({
       lists: get().lists.map((l) => (l.id === listId ? { ...l, accountIds: [] } : l)),
+    });
+  },
+
+  setRebate: (listId, accountId, rebate) => {
+    // Stored per account on the list. 1 is a meaningful value in scraper.py
+    // ("skip the rebate step"), so it has to survive a save/load round trip.
+    set({
+      lists: get().lists.map((l) =>
+        l.id === listId ? { ...l, rebates: { ...l.rebates, [accountId]: rebate } } : l,
+      ),
     });
   },
 

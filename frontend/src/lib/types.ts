@@ -35,7 +35,10 @@ export interface AccountList {
   accountIds: string[];
   /**
    * Optional per-account rebate (installment no.), keyed by account ObjectId.
-   * `1` means "no rebate, just pay" — absent means the same.
+   *
+   * Absent means `0` — the Streamlit UI read `acc.get("Rebate", 0)` and those
+   * documents have no `Rebate` field. `scraper.py` skips the rebate step only
+   * when the value is `1`.
    */
   rebates?: Record<string, number>;
 }

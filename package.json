@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "npm run clean:dmg && tauri build",
+    "build:app": "npm run clean:dmg && tauri build --bundles app",
     "clean:dmg": "node scripts/clean-dmg-temp.mjs",
     "tauri": "tauri",
     "frontend:build": "npm --prefix frontend run build",

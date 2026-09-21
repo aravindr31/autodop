@@ -24,11 +24,29 @@ function copyText(text: string): boolean {
 
 function ItemRow({ listId, account }: { listId: string; account: Account }): React.ReactElement {
   const store = useStore.getState();
+  // Primitive selector, so the row re-renders only when its own value changes.
+  const rebate = useStore(
+    (s) => s.lists.find((l) => l.id === listId)?.rebates?.[account._id] ?? 0,
+  );
   return (
     <tr className="border-b border-slate-100 last:border-0">
       <td className="px-3 py-2 text-sm font-medium text-slate-800">{account.Name}</td>
       <td className="px-3 py-2 font-mono text-xs text-slate-500">{account.Number}</td>
       <td className="px-3 py-2 text-right text-sm tabular-nums text-slate-600">{denominationLabel(account.Denomination)}</td>
+      <td className="px-3 py-2 text-right">
+        <input
+          type="number"
+          min={0}
+          value={rebate}
+          aria-label={`Rebate for ${account.Name}`}
+          title="RD installment number sent for this account. 1 = skip the rebate step in scraper.py."
+          onChange={(event) => {
+            const next = Number.parseInt(event.currentTarget.value, 10);
+            store.setRebate(listId, account._id, Number.isFinite(next) ? next : 0);
+          }}
+          className="w-16 rounded-md border border-slate-200 bg-white px-2 py-1 text-right text-xs tabular-nums text-slate-700 focus:border-indigo-400 focus:outline-2 focus:outline-offset-0 focus:outline-indigo-200"
+        />
+      </td>
       <td className="px-3 py-2 text-right">
         <IconButton
           label={`Remove ${account.Name}`}
@@ -46,6 +64,122 @@ function ItemRow({ listId, account }: { listId: string; account: Account }): Rea
 }
 
 /**
+ * Payload for one list, shaped exactly as the Streamlit UI built it —
+ * `{ name, numbers, rebate }`, see `main.py:557`.
+ *
+ * The rebate default matters: the original read `acc.get("Rebate", 0)` and
+ * those account documents carry no `Rebate` field, so 0 was the effective
+ * value. `scraper.py:165` only *skips* the rebate step when the value is 1 — so
+ * 0 means "set the installment number to 0", not "leave it alone".
+ */
+function listPayload(
+  list: AccountList,
+  accounts: Account[],
+): { name: string; numbers: string[]; rebate: number[] } {
+  const entries = list.accountIds.flatMap((id) => {
+    const account = accounts.find((a) => a._id === id);
+    return account && account.Number
+      ? [{ number: account.Number, rebate: list.rebates?.[id] ?? 0 }]
+      : [];
+  });
+  return {
+    name: list.name,
+    numbers: entries.map((entry) => entry.number),
+    rebate: entries.map((entry) => entry.rebate),
+  };
+}
+
+/** State shared by every Generate button: busy, live progress, last failure. */
+function useGenerate() {
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
+  // Survives the run: progress is cleared when it ends, and a failure has to
+  // stay readable instead of flashing past.
+  const [failure, setFailure] = useState<{
+    message: string;
+    log?: string;
+    logPath?: string;
+  } | null>(null);
+
+  useEffect(() => onProgress((message) => setProgress(message)), []);
+
+  const run = async (payload: Array<{ name: string; numbers: string[]; rebate: number[] }>) => {
+    const total = payload.reduce((sum, item) => sum + item.numbers.length, 0);
+    if (total === 0) {
+      notify('No account numbers to generate yet.', 'error');
+      return;
+    }
+    setBusy(true);
+    setFailure(null);
+    setProgress('Starting scraper…');
+    // Every selected list goes into ONE invocation, the way the Streamlit
+    // "Generate All Lists" button did: scraper.py loops over the array itself.
+    const res = await generateLists(payload);
+    setBusy(false);
+    setProgress('');
+    if (!res.ok) {
+      // Show the backend's own log — the scraper's stderr is where a Python
+      // traceback lands, and it used to be discarded here.
+      setFailure({ message: res.error ?? 'Generate failed', log: res.log, logPath: res.log_path });
+      notify(res.error ?? 'Generate failed', 'error');
+      return;
+    }
+    const rows = res.results ?? [];
+    const succeeded = rows.filter((r) => r.status === 'success').length;
+    const allOk = rows.length > 0 && succeeded === rows.length;
+    if (!allOk) {
+      setFailure({
+        message: `Generated ${succeeded}/${rows.length} list(s)`,
+        log: res.log,
+        logPath: res.log_path,
+      });
+    }
+    notify(
+      allOk
+        ? `Generated ${succeeded} list(s) successfully`
+        : `Generated ${succeeded}/${rows.length} list(s) — check logs`,
+      allOk ? 'success' : 'error',
+    );
+  };
+
+  return { busy, progress, failure, run };
+}
+
+/** The failure panel: the backend's log tail, and where the full log lives. */
+function FailureNote({
+  failure,
+}: {
+  failure: { message: string; log?: string; logPath?: string };
+}): React.ReactElement {
+  return (
+    <div className="mt-2 basis-full rounded-md border border-rose-200 bg-rose-50/70 p-2 text-[11px] leading-relaxed text-rose-900">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">{failure.message}</span>
+        {failure.log ? (
+          <button
+            type="button"
+            className="shrink-0 rounded px-1.5 py-0.5 font-medium text-rose-700 hover:bg-rose-100"
+            onClick={() => {
+              if (copyText(failure.log ?? '')) notify('Log copied', 'success');
+            }}
+          >
+            Copy log
+          </button>
+        ) : null}
+      </div>
+      {failure.log ? (
+        <pre className="mt-1 max-h-40 overflow-auto font-mono whitespace-pre-wrap break-all">
+          {failure.log}
+        </pre>
+      ) : null}
+      {failure.logPath ? (
+        <p className="mt-1 break-all text-rose-700/80">Full log: {failure.logPath}</p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * "Generate (DOP)" — hands this list's account numbers to scraper.py through
  * the pywebview desktop shell. In a plain browser there is no bridge, so the
  * button explains that instead of silently doing nothing.
@@ -53,12 +187,9 @@ function ItemRow({ listId, account }: { listId: string; account: Account }): Rea
 function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[] }): React.ReactElement {
   const { ready, info } = useDesktop();
   const accounts = useStore((s) => s.accounts);
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState('');
+  const { busy, progress, failure, run } = useGenerate();
 
-  useEffect(() => onProgress((message) => setProgress(message)), []);
-
-  const run = async () => {
+  const start = () => {
     if (!ready) {
       notify('Generate needs the desktop app — launch it with `npm run dev`', 'error');
       return;
@@ -67,39 +198,7 @@ function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[
       notify(`No account numbers in ${list.name} yet.`, 'error');
       return;
     }
-    setBusy(true);
-    setProgress('Starting scraper…');
-    // Rebates come from the list when Atlas supplied them; 1 = "no rebate, just pay".
-    const entries = list.accountIds.flatMap((id) => {
-      const account = accounts.find((a) => a._id === id);
-      return account && account.Number
-        ? [{ number: account.Number, rebate: list.rebates?.[id] ?? 1 }]
-        : [];
-    });
-    const payload =
-      entries.length > 0 ? entries : numbers.map((number) => ({ number, rebate: 1 }));
-    const res = await generateLists([
-      {
-        name: list.name,
-        numbers: payload.map((entry) => entry.number),
-        rebate: payload.map((entry) => entry.rebate),
-      },
-    ]);
-    setBusy(false);
-    setProgress('');
-    if (!res.ok) {
-      notify(res.error ?? 'Generate failed', 'error');
-      return;
-    }
-    const rows = res.results ?? [];
-    const succeeded = rows.filter((r) => r.status === 'success').length;
-    const allOk = rows.length > 0 && succeeded === rows.length;
-    notify(
-      allOk
-        ? `Generated ${succeeded} list(s) successfully`
-        : `Generated ${succeeded}/${rows.length} list(s) — check logs`,
-      allOk ? 'success' : 'error',
-    );
+    void run([listPayload(list, accounts)]);
   };
 
   const hint = !ready
@@ -110,11 +209,52 @@ function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[
 
   return (
     <>
-      <Button variant="secondary" size="sm" disabled={busy} onClick={() => void run()} title={hint}>
+      <Button variant="secondary" size="sm" disabled={busy} onClick={start} title={hint}>
         <Play className="h-4 w-4" />{busy ? 'Generating…' : 'Generate (DOP)'}
       </Button>
       {progress ? <span className="text-[11px] text-slate-500">{progress}</span> : null}
+      {failure ? <FailureNote failure={failure} /> : null}
     </>
+  );
+}
+
+/**
+ * "Generate All Lists" — the Streamlit UI's headline action, restored: every
+ * non-empty list goes out in a single scraper.py invocation, which logs in once
+ * and then works through the lists in order.
+ */
+function GenerateAllButton({ lists }: { lists: AccountList[] }): React.ReactElement {
+  const { ready, info } = useDesktop();
+  const accounts = useStore((s) => s.accounts);
+  const { busy, progress, failure, run } = useGenerate();
+
+  const accountCount = lists.reduce((sum, l) => sum + l.accountIds.length, 0);
+  const hint = !ready
+    ? 'Available in the desktop app (npm run dev)'
+    : info && !info.credentials
+      ? 'Add DOP credentials in Manage → DOP Credentials first'
+      : `Run scraper.py once for all ${lists.length} list(s)`;
+
+  const start = () => {
+    if (!ready) {
+      notify('Generate needs the desktop app — launch it with `npm run dev`', 'error');
+      return;
+    }
+    void run(lists.map((l) => listPayload(l, accounts)));
+  };
+
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5">
+      <Button variant="primary" size="sm" disabled={busy} onClick={start} title={hint}>
+        <Play className="h-4 w-4" />
+        {busy ? 'Generating all…' : 'Generate All Lists'}
+      </Button>
+      <span className="text-[11px] text-slate-500">
+        {lists.length} list(s) · {accountCount} account(s) · one run
+      </span>
+      {progress ? <span className="text-[11px] text-slate-500">{progress}</span> : null}
+      {failure ? <FailureNote failure={failure} /> : null}
+    </div>
   );
 }
 
@@ -182,6 +322,7 @@ function ListCard({ listId }: { listId: string }): React.ReactElement {
                 <th className="py-2 pl-3 pr-3 font-medium">Name</th>
                 <th className="py-2 pl-3 pr-3 font-medium">Number</th>
                 <th className="py-2 pl-3 pr-3 text-right font-medium">Denom</th>
+                <th className="py-2 pl-3 pr-3 text-right font-medium">Rebate</th>
                 <th className="py-2 pl-3 pr-3" aria-hidden />
               </tr>
             </thead>
@@ -248,6 +389,9 @@ export default function ListsView(): React.ReactElement {
         </div>
         <Button variant="secondary" size="sm" onClick={saveEndpoint}>Save</Button>
       </div>
+
+      {/* The Streamlit UI's single "Generate All Lists" action (main.py:543). */}
+      {populated.length > 0 ? <GenerateAllButton lists={populated} /> : null}
 
       {populated.length === 0 ? (
         <EmptyState

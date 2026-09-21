@@ -220,6 +220,19 @@ function DesktopSection(): React.ReactElement {
               scraper.py was not found — set <code className="font-mono">AUTODOP_SCRAPER</code> to its path.
             </p>
           ) : null}
+          {info ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+              Python: <code className="font-mono">{info.python}</code>
+              {info.python.includes('/') ? null : (
+                <>
+                  {' '}
+                  — the bare <code className="font-mono">python3</code> from PATH. Install selenium into
+                  it, or point <code className="font-mono">AUTODOP_PYTHON</code> at an interpreter that
+                  has it.
+                </>
+              )}
+            </p>
+          ) : null}
           <CredentialSourceNote />
         </>
       ) : (

@@ -9,9 +9,11 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Read};
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -46,6 +48,10 @@ pub struct GenResult {
     pub returncode: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<String>,
+    /// Where the full run log was written, so a failure can be inspected later
+    /// instead of vanishing with the progress area.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
 }
 
 impl GenResult {
@@ -56,6 +62,7 @@ impl GenResult {
             error: Some(message.into()),
             returncode: None,
             log: None,
+            log_path: None,
         }
     }
 }
@@ -102,6 +109,78 @@ fn python_bin() -> String {
         "python".to_string()
     } else {
         "python3".to_string()
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// run logs                                                                    //
+// --------------------------------------------------------------------------- //
+
+/// Seconds since the Unix epoch.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Format an epoch timestamp as RFC 3339 UTC.
+///
+/// Hand-rolled so the app does not carry a date library for one string; the
+/// civil-date step is Howard Hinnant's `civil_from_days`.
+fn rfc3339_utc(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (hour, minute, second) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { year + 1 } else { year };
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Filename-safe timestamp: `20260921-195210Z` (colons are illegal on Windows).
+fn compact_timestamp(secs: u64) -> String {
+    rfc3339_utc(secs).replace(['-', ':'], "").replace('T', "-")
+}
+
+/// The log file for a single scraper run.
+#[derive(Clone)]
+struct RunLog {
+    file: Arc<Mutex<File>>,
+    path: PathBuf,
+}
+
+impl RunLog {
+    /// Opens `<app log dir>/scraper-<timestamp>.log`.
+    ///
+    /// Returns `None` if that path cannot be used: logging is diagnostics, so
+    /// it must never be the reason a run fails.
+    fn open(app: &AppHandle) -> Option<Self> {
+        let dir = app.path().app_log_dir().ok()?;
+        std::fs::create_dir_all(&dir).ok()?;
+        let path = dir.join(format!("scraper-{}.log", compact_timestamp(now_secs())));
+        let file = File::create(&path).ok()?;
+        Some(Self {
+            file: Arc::new(Mutex::new(file)),
+            path,
+        })
+    }
+
+    fn write(&self, line: &str) {
+        if let Ok(mut file) = self.file.lock() {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
+    fn path_string(&self) -> String {
+        self.path.display().to_string()
     }
 }
 
@@ -303,11 +382,25 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
 
 fn run_scraper(
     app: &AppHandle,
-    script: &std::path::Path,
+    script: &Path,
     user: &str,
     password: &str,
     lists_json: &str,
 ) -> GenResult {
+    // Mirror the run to a file: the progress area is cleared as soon as the
+    // window moves on, and a failure has to stay inspectable afterwards.
+    let run_log = RunLog::open(app);
+    if let Some(log) = &run_log {
+        log.write("autodop - scraper run");
+        log.write(&format!("started:  {}", rfc3339_utc(now_secs())));
+        log.write(&format!("python:   {}", python_bin()));
+        log.write(&format!("script:   {}", script.display()));
+        log.write(&format!("user:     {user}"));
+        log.write("password: <redacted>");
+        log.write(&format!("payload:  {lists_json}"));
+        log.write("------------------------------------------------------------");
+    }
+
     let mut child = match Command::new(python_bin())
         .arg(script)
         .arg(user)
@@ -328,21 +421,37 @@ fn run_scraper(
     let stderr_pipe = child.stderr.take();
 
     let app_for_stdout = app.clone();
+    let log_for_stdout = run_log.clone();
     let stdout_thread = std::thread::spawn(move || {
         let mut collected = String::new();
         if let Some(pipe) = stdout_pipe {
             for line in BufReader::new(pipe).lines().map_while(Result::ok) {
                 let _ = app_for_stdout.emit(PROGRESS_EVENT, line.clone());
+                if let Some(log) = &log_for_stdout {
+                    log.write(&line);
+                }
                 collected.push_str(&line);
                 collected.push('\n');
             }
         }
         collected
     });
+    let app_for_stderr = app.clone();
+    let log_for_stderr = run_log.clone();
     let stderr_thread = std::thread::spawn(move || {
         let mut collected = String::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let _ = pipe.read_to_string(&mut collected);
+        if let Some(pipe) = stderr_pipe {
+            // Stream stderr to the UI too. A Python traceback is the single most
+            // useful thing a failed run produces, and it used to be collected
+            // silently, truncated into `log`, and then never rendered.
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                let _ = app_for_stderr.emit(PROGRESS_EVENT, line.clone());
+                if let Some(log) = &log_for_stderr {
+                    log.write(&line);
+                }
+                collected.push_str(&line);
+                collected.push('\n');
+            }
         }
         collected
     });
@@ -383,11 +492,13 @@ fn run_scraper(
                 error: None,
                 returncode: Some(code),
                 log: tail(&stderr, 1500),
+                log_path: run_log.as_ref().map(RunLog::path_string),
             }
         }
         None => {
             let mut result = GenResult::err("Scraper produced no parseable result.");
             result.returncode = status.map(|s| s.code().unwrap_or(-1));
+            result.log_path = run_log.as_ref().map(RunLog::path_string);
             result.log = tail(
                 if stderr.trim().is_empty() {
                     &stdout
@@ -470,6 +581,12 @@ async fn dop_credentials_status(app: AppHandle) -> db::DopCredentialStatus {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            // Make `.env` values visible to code that reads `std::env` directly
+            // (`AUTODOP_PYTHON`, `AUTODOP_SCRAPER`); `db::setting` only looks up.
+            db::hydrate_env(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             set_credentials,
@@ -494,6 +611,37 @@ mod tests {
             numbers: numbers.iter().map(|s| s.to_string()).collect(),
             rebate: rebate.to_vec(),
         }
+    }
+
+    #[test]
+    fn keeps_every_list_in_one_payload() {
+        // "Generate All Lists" hands every list to a single scraper.py run.
+        let payload = build_payload(vec![
+            list("A", &["111"], &[0]),
+            list("B", &["222", "333"], &[0, 2]),
+        ]);
+        assert_eq!(payload.len(), 2);
+        assert_eq!(payload[0]["name"], json!("A"));
+        assert_eq!(payload[1]["name"], json!("B"));
+        assert_eq!(payload[1]["numbers"], json!(["222", "333"]));
+        assert_eq!(payload[1]["rebate"], json!([0, 2]));
+    }
+
+    #[test]
+    fn formats_epoch_timestamps_as_utc() {
+        // Expected values cross-checked against Python's datetime.
+        assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(rfc3339_utc(1_000_000_000), "2001-09-09T01:46:40Z");
+        assert_eq!(rfc3339_utc(1_758_468_000), "2025-09-21T15:20:00Z");
+        assert_eq!(rfc3339_utc(2_000_000_000), "2033-05-18T03:33:20Z");
+    }
+
+    #[test]
+    fn log_filenames_are_safe_on_every_platform() {
+        let name = compact_timestamp(1_758_468_000);
+        assert_eq!(name, "20250921-152000Z");
+        // Windows rejects ':' in file names.
+        assert!(!name.contains(':'));
     }
 
     #[test]

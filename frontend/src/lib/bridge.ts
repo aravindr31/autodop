@@ -15,7 +15,7 @@ import type { Account, AccountList } from './types';
 export interface GenList {
   name: string;
   numbers: string[];
-  /** Per-account rebate (installment no.). `1` means "no rebate, just pay". */
+  /** Per-account rebate (RD installment no.). `1` makes scraper.py skip the step. */
   rebate: number[];
 }
 
@@ -25,6 +25,8 @@ export interface GenResult {
   error?: string;
   returncode?: number;
   log?: string;
+  /** Path to the full run log, written by the backend. */
+  log_path?: string;
 }
 
 export interface AppInfo {
@@ -150,9 +152,12 @@ export async function loadAccountsFromDb(): Promise<{
 
 /** Convert an Atlas `savedList` document into the local list shape. */
 export function dbListToLocal(list: DbList): AccountList {
+  // Keep every rebate, including 1: it is a meaningful value ("skip the rebate
+  // step" in scraper.py). Filtering it out here made an explicit 1 silently
+  // revert to the default on the next load.
   const rebates: Record<string, number> = {};
   for (const entry of list.entries) {
-    if (entry.rebate !== 1) rebates[entry.id] = entry.rebate;
+    rebates[entry.id] = entry.rebate;
   }
   const local: AccountList = {
     id: list.id,
@@ -169,7 +174,8 @@ export function localListToDb(list: AccountList, active: boolean): DbList {
     id: list.id,
     name: list.name,
     active,
-    entries: list.accountIds.map((id) => ({ id, rebate: list.rebates?.[id] ?? 1 })),
+    // 0 matches the Streamlit UI's `acc.get("Rebate", 0)` default.
+    entries: list.accountIds.map((id) => ({ id, rebate: list.rebates?.[id] ?? 0 })),
   };
 }
 

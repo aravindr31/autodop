@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { Account } from './types';
 
 export interface GenList {
   name: string;
@@ -32,6 +33,16 @@ export interface AppInfo {
   scraper_present: boolean;
   credentials: boolean;
   python: string;
+}
+
+/** Atlas connection state reported by the Rust backend. */
+export interface DbStatus {
+  configured: boolean;
+  connected: boolean;
+  db: string;
+  collection: string;
+  count?: number;
+  error?: string;
 }
 
 /** Event name the Rust side streams scraper output on. */
@@ -90,6 +101,31 @@ export async function saveCredentials(
   try {
     await invoke('set_credentials', { username, password });
     return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Ping Atlas: is a URI configured, and is the cluster reachable? */
+export async function dbStatus(): Promise<DbStatus | null> {
+  if (!isDesktop()) return null;
+  try {
+    return await invoke<DbStatus>('db_status');
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch all accounts from Atlas (db `accounts`, collection `accountHolders`). */
+export async function loadAccountsFromDb(): Promise<{
+  ok: boolean;
+  accounts?: Account[];
+  error?: string;
+}> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    const accounts = await invoke<Account[]>('load_accounts');
+    return { ok: true, accounts };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

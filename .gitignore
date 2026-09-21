@@ -3,3 +3,9 @@ dist/
 src-tauri/target/
 src-tauri/gen/
 .DS_Store
+
+# Secrets — never commit connection strings or credentials.
+.env
+.env.*
+!.env.example
+src-tauri/.env

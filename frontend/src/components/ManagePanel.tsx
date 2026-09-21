@@ -8,8 +8,9 @@ import { useState, useEffect } from 'react';
 import { useStore } from '../lib/store';
 import { matchesQuery, denominationLabel } from '../lib/format';
 import { notify } from '../lib/toast';
-import { saveCredentials, useDesktop } from '../lib/bridge';
-import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal } from 'lucide-react';
+import { saveCredentials, useDesktop, dbStatus, loadAccountsFromDb } from '../lib/bridge';
+import type { DbStatus } from '../lib/bridge';
+import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database } from 'lucide-react';
 import { Button, Pill } from './ui';
 
 const FIELD =
@@ -222,6 +223,78 @@ function DesktopSection(): React.ReactElement {
   );
 }
 
+function DatabaseSection(): React.ReactElement {
+  const { ready } = useDesktop();
+  const shown = useStore((s) => s.accounts.length);
+  const [status, setStatus] = useState<DbStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const check = async () => {
+    setBusy(true);
+    setStatus(await dbStatus());
+    setBusy(false);
+  };
+
+  useEffect(() => {
+    if (ready) void check();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
+
+  const reload = async () => {
+    setBusy(true);
+    const res = await loadAccountsFromDb();
+    setBusy(false);
+    if (!res.ok || !res.accounts) {
+      notify(res.error ?? 'Reload failed', 'error');
+      return;
+    }
+    useStore.getState().setAccounts(res.accounts);
+    notify(`Reloaded ${res.accounts.length} accounts`, 'success');
+    void check();
+  };
+
+  return (
+    <Section title="Database (MongoDB Atlas)">
+      {!ready ? (
+        <p className="text-xs text-slate-500">Available in the desktop app only.</p>
+      ) : (
+        <>
+          <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+            {status?.connected ? (
+              <>
+                <Pill tone="positive"><Database className="h-3 w-3" />connected</Pill>
+                <span className="font-mono">{status.db}.{status.collection}</span>
+                {typeof status.count === 'number' ? (
+                  <span>· {status.count.toLocaleString('en-IN')} docs</span>
+                ) : null}
+                <span>· showing {shown.toLocaleString('en-IN')}</span>
+              </>
+            ) : (
+              <>
+                <Pill tone="neutral">{status?.configured ? 'configured' : 'not configured'}</Pill>
+                <span>{status?.error ?? 'Checking…'}</span>
+              </>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="secondary" className="!w-full" disabled={busy} onClick={() => void check()}>
+              Check connection
+            </Button>
+            <Button variant="primary" className="!w-full" disabled={busy || !status?.connected} onClick={() => void reload()}>
+              Reload accounts
+            </Button>
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+            URI comes from <code className="font-mono">src-tauri/.env</code> (gitignored) or the{' '}
+            <code className="font-mono">MONGO_URI</code> env var. Override the target with{' '}
+            <code className="font-mono">MONGO_DB</code> / <code className="font-mono">MONGO_COLLECTION</code>.
+          </p>
+        </>
+      )}
+    </Section>
+  );
+}
+
 export default function ManagePanel({ onClose }: { onClose: () => void }): React.ReactElement {
   const store = useStore.getState();
   const accounts = useStore((s) => s.accounts);
@@ -246,6 +319,7 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
           <AddAccountSection />
           <DeleteAccountSection />
           <ChangePasswordSection />
+          <DatabaseSection />
           <DesktopSection />
         </div>
 

@@ -15,6 +15,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub mod db;
+
 /// Selenium waits up to 360s for the DOP login alone; allow a long ceiling.
 const SCRAPER_TIMEOUT_SECS: u64 = 3600;
 /// Event name the frontend subscribes to for live scraper output.
@@ -234,7 +236,9 @@ fn set_credentials(app: AppHandle, username: String, password: String) -> Result
 async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
     let (user, password) = load_credentials(&app);
     if user.trim().is_empty() || password.trim().is_empty() {
-        return GenResult::err("No DOP credentials configured. Set them in Manage → DOP Credentials.");
+        return GenResult::err(
+            "No DOP credentials configured. Set them in Manage → DOP Credentials.",
+        );
     }
     let Some(script) = scraper_path() else {
         return GenResult::err("scraper.py not found (set AUTODOP_SCRAPER to its path).");
@@ -354,7 +358,14 @@ fn run_scraper(
         None => {
             let mut result = GenResult::err("Scraper produced no parseable result.");
             result.returncode = status.map(|s| s.code().unwrap_or(-1));
-            result.log = tail(if stderr.trim().is_empty() { &stdout } else { &stderr }, 1500);
+            result.log = tail(
+                if stderr.trim().is_empty() {
+                    &stdout
+                } else {
+                    &stderr
+                },
+                1500,
+            );
             result
         }
     }
@@ -379,13 +390,27 @@ fn tail(text: &str, limit: usize) -> Option<String> {
 // entrypoint                                                                  //
 // --------------------------------------------------------------------------- //
 
+/// Report whether an Atlas connection is configured and reachable.
+#[tauri::command]
+async fn db_status(app: AppHandle) -> db::DbStatus {
+    db::fetch_status(&app).await
+}
+
+/// Load every account document from Atlas, mapped to the frontend shape.
+#[tauri::command]
+async fn load_accounts(app: AppHandle) -> Result<Vec<Value>, String> {
+    db::fetch_accounts(&app).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             app_info,
             set_credentials,
-            generate_lists
+            generate_lists,
+            db_status,
+            load_accounts
         ])
         .run(tauri::generate_context!())
         .expect("error while running AutoDOP");

@@ -59,6 +59,45 @@ Rust backend to the app config folder — never to the browser:
 | `AUTODOP_PYTHON` | `python3` (mac) / `python` (win) | interpreter to launch it with |
 | `DOP_USERNAME` / `DOP_PASSWORD` | config file | portal credentials |
 
+## Database (MongoDB Atlas)
+
+Accounts are read from Atlas by the Rust backend — the webview never sees the
+connection string.
+
+```bash
+cp src-tauri/.env.example src-tauri/.env   # then paste your URI
+```
+
+**Verified against your cluster** (`cargo run --example db_probe`):
+
+| Database | Collection | Docs | Contents |
+| --- | --- | --- | --- |
+| `accounts` | `accountHolders` | 149 | the account documents ← accounts come from here |
+| `accounts` | `savedList` | 26 | lists, each with `{id, rebate}` per account |
+| `accounts` | `users` | 1 | login record |
+| `accounts` | `admin` | 1 | — |
+| `accounts` | `list` | 0 | empty |
+
+`accounts.accounts` is **empty** — the collection is `accountHolders`, which is
+the default. Document fields confirmed as `_id, Number, Name, Denomination,
+CNumber, Ref_Number, addedIn`.
+
+**Manage (gear) → Database** shows connection status and a **Reload accounts**
+button. On launch the app loads accounts from Atlas when reachable, otherwise it
+keeps the persisted/seeded set.
+
+### Overrides
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONGO_URI` | — | Atlas connection string (required) |
+| `MONGO_DB` | `accounts` | database name |
+| `MONGO_COLLECTION` | `accountHolders` | account documents collection |
+| `AUTODOP_ENV_FILE` | — | explicit path to a `.env` to read |
+
+Environment variables win over the `.env` file. `src-tauri/.env` is gitignored;
+`src-tauri/.env.example` is the committed template.
+
 ## Notes and limits
 
 - **Rebate** — `scraper.py` needs one rebate value per account (`1` = "no

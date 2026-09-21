@@ -9,7 +9,8 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../lib/store';
 import { formatINR } from '../lib/format';
-import { onNotify } from '../lib/toast';
+import { onNotify, notify } from '../lib/toast';
+import { dbStatus, isDesktop, loadAccountsFromDb } from '../lib/bridge';
 import { SidebarPanel } from './Sidebar';
 import Sidebar from './Sidebar';
 import Browser from './Browser';
@@ -55,6 +56,27 @@ export default function App(): React.ReactElement {
       }),
     [],
   );
+
+  // In the desktop app, source accounts from Atlas when it is reachable;
+  // otherwise the persisted/seeded accounts stay in place.
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    void (async () => {
+      const status = await dbStatus();
+      if (cancelled || !status?.connected) return;
+      const res = await loadAccountsFromDb();
+      if (cancelled || !res.ok || !res.accounts) {
+        if (!cancelled && res.error) notify(`Database load failed: ${res.error}`, 'error');
+        return;
+      }
+      useStore.getState().setAccounts(res.accounts);
+      notify(`Loaded ${res.accounts.length} accounts from ${status.db}.${status.collection}`, 'success');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // All hooks above are unconditional; the gate below is a pure render branch.
   if (!loggedIn) {

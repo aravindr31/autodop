@@ -53,6 +53,8 @@ export interface AppState {
   // ---- account actions ----
   addAccount: (input: NewAccountInput) => Account;
   deleteAccount: (id: string) => boolean;
+  /** Replace the whole account list (e.g. after loading from Atlas). */
+  setAccounts: (accounts: Account[]) => void;
 
   // ---- auth actions (async: WebCrypto) ----
   setupPassword: (password: string) => Promise<void>;
@@ -281,6 +283,8 @@ export const useStore = create<AppState>()((set, get) => ({
     });
     return true;
   },
+
+  setAccounts: (accounts) => set({ accounts }),
 
   // ---- auth actions (async: WebCrypto) ----
   setupPassword: async (password) => {

@@ -33,6 +33,11 @@ export interface AccountList {
   name: string;
   /** ObjectIds of the `Account` entries in this list (order preserved). */
   accountIds: string[];
+  /**
+   * Optional per-account rebate (installment no.), keyed by account ObjectId.
+   * `1` means "no rebate, just pay" — absent means the same.
+   */
+  rebates?: Record<string, number>;
 }
 
 /** Client-side session credential (salted SHA-256). Pending the real backend. */

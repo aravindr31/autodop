@@ -402,6 +402,18 @@ async fn load_accounts(app: AppHandle) -> Result<Vec<Value>, String> {
     db::fetch_accounts(&app).await
 }
 
+/// Load the saved lists (and per-account rebates) from Atlas.
+#[tauri::command]
+async fn load_lists(app: AppHandle) -> Result<Vec<db::DbList>, String> {
+    db::fetch_lists(&app).await
+}
+
+/// Upsert the supplied lists to Atlas and return what is now stored.
+#[tauri::command]
+async fn save_lists(app: AppHandle, lists: Vec<db::InputList>) -> Result<Vec<db::DbList>, String> {
+    db::save_lists(&app, lists).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -410,7 +422,9 @@ pub fn run() {
             set_credentials,
             generate_lists,
             db_status,
-            load_accounts
+            load_accounts,
+            load_lists,
+            save_lists
         ])
         .run(tauri::generate_context!())
         .expect("error while running AutoDOP");

@@ -55,6 +55,8 @@ export interface AppState {
   deleteAccount: (id: string) => boolean;
   /** Replace the whole account list (e.g. after loading from Atlas). */
   setAccounts: (accounts: Account[]) => void;
+  /** Replace every list (e.g. after loading from or saving to Atlas). */
+  setLists: (lists: AccountList[], activeListId?: string) => void;
 
   // ---- auth actions (async: WebCrypto) ----
   setupPassword: (password: string) => Promise<void>;
@@ -285,6 +287,14 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   setAccounts: (accounts) => set({ accounts }),
+
+  setLists: (lists, activeListId) =>
+    set((state) => ({
+      lists,
+      activeListId:
+        activeListId ??
+        (lists.some((l) => l.id === state.activeListId) ? state.activeListId : (lists[0]?.id ?? '')),
+    })),
 
   // ---- auth actions (async: WebCrypto) ----
   setupPassword: async (password) => {

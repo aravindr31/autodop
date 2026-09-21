@@ -10,7 +10,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { Account } from './types';
+import type { Account, AccountList } from './types';
 
 export interface GenList {
   name: string;
@@ -41,8 +41,25 @@ export interface DbStatus {
   connected: boolean;
   db: string;
   collection: string;
+  /** False when the Atlas user can only read — saving lists would be refused. */
+  writable?: boolean;
+  /** Authenticated roles, e.g. `['readAnyDatabase']`. */
+  roles?: string[];
   count?: number;
   error?: string;
+}
+
+/** A list as stored in Atlas (`savedList`). */
+export interface DbListEntry {
+  id: string;
+  rebate: number;
+}
+
+export interface DbList {
+  id: string;
+  name: string;
+  active: boolean;
+  entries: DbListEntry[];
 }
 
 /** Event name the Rust side streams scraper output on. */
@@ -126,6 +143,66 @@ export async function loadAccountsFromDb(): Promise<{
   try {
     const accounts = await invoke<Account[]>('load_accounts');
     return { ok: true, accounts };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Convert an Atlas `savedList` document into the local list shape. */
+export function dbListToLocal(list: DbList): AccountList {
+  const rebates: Record<string, number> = {};
+  for (const entry of list.entries) {
+    if (entry.rebate !== 1) rebates[entry.id] = entry.rebate;
+  }
+  const local: AccountList = {
+    id: list.id,
+    name: list.name,
+    accountIds: list.entries.map((entry) => entry.id),
+  };
+  if (Object.keys(rebates).length > 0) local.rebates = rebates;
+  return local;
+}
+
+/** Convert a local list into the document shape Atlas expects. */
+export function localListToDb(list: AccountList, active: boolean): DbList {
+  return {
+    id: list.id,
+    name: list.name,
+    active,
+    entries: list.accountIds.map((id) => ({ id, rebate: list.rebates?.[id] ?? 1 })),
+  };
+}
+
+/** Load the saved lists from Atlas. */
+export async function loadLists(): Promise<{
+  ok: boolean;
+  lists?: AccountList[];
+  activeId?: string;
+  error?: string;
+}> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    const raw = await invoke<DbList[]>('load_lists');
+    return {
+      ok: true,
+      lists: raw.map(dbListToLocal),
+      activeId: raw.find((list) => list.active)?.id,
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Upsert the local lists to Atlas; resolves with what is now stored. */
+export async function saveLists(
+  lists: AccountList[],
+  activeListId: string,
+): Promise<{ ok: boolean; lists?: AccountList[]; error?: string }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    const payload = lists.map((list) => localListToDb(list, list.id === activeListId));
+    const saved = await invoke<DbList[]>('save_lists', { lists: payload });
+    return { ok: true, lists: saved.map(dbListToLocal) };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

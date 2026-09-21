@@ -73,7 +73,7 @@ cp src-tauri/.env.example src-tauri/.env   # then paste your URI
 | Database | Collection | Docs | Contents |
 | --- | --- | --- | --- |
 | `accounts` | `accountHolders` | 149 | the account documents ← accounts come from here |
-| `accounts` | `savedList` | 26 | lists, each with `{id, rebate}` per account |
+| `accounts` | `savedList` | 26 | lists (`A`…`Z`), each with `{id, rebate}` per account |
 | `accounts` | `users` | 1 | login record |
 | `accounts` | `admin` | 1 | — |
 | `accounts` | `list` | 0 | empty |
@@ -82,9 +82,46 @@ cp src-tauri/.env.example src-tauri/.env   # then paste your URI
 the default. Document fields confirmed as `_id, Number, Name, Denomination,
 CNumber, Ref_Number, addedIn`.
 
-**Manage (gear) → Database** shows connection status and a **Reload accounts**
-button. On launch the app loads accounts from Atlas when reachable, otherwise it
-keeps the persisted/seeded set.
+**Manage (gear) → Database** shows connection status plus **Reload accounts**,
+**Load lists** and **Save lists to Atlas**. On launch the app loads accounts from
+Atlas when reachable, otherwise it keeps the persisted/seeded set.
+
+### Lists
+
+List documents are `{_id, listName, active, accounts: [{id: ObjectId, rebate}]}`.
+
+- **Load lists** replaces the local lists with the stored ones and adopts the
+  list marked `active`.
+- **Save lists to Atlas** upserts the lists you have and adopts the stored ids,
+  so a later save updates in place instead of duplicating. **Nothing is ever
+  deleted** — lists you removed locally stay in Atlas.
+- Documents are matched by `_id` when it is a real ObjectId, otherwise by
+  `listName` (local ids are UUIDs, so this is what updates the existing A–Z
+  rows rather than inserting new ones).
+- `rebate` rides along per account, so **Generate (DOP)** sends the stored value
+  instead of assuming `1`.
+
+Your 26 lists are currently **empty shells** — every one has `accounts: []`, so
+there is no membership or rebate data to import yet. `A` is the one flagged
+`active`.
+
+### Your Atlas user is read-only
+
+The probe reports the authenticated roles, and this connection is
+**`readAnyDatabase`** — reads work, writes do not. Atlas refuses:
+
+```
+user is not allowed to do action [update] on [accounts.savedList]
+```
+
+So **Load lists** and both **Reload accounts** paths work, but **Save lists to
+Atlas** is disabled in the UI with the reason shown. To enable it, give that
+Atlas user the `readWrite` role on the `accounts` database (Atlas → Database
+Access → Edit User → Built-in Role). Nothing is broken meanwhile — the failing
+call is refused cleanly rather than half-applied.
+
+`db_status` returns `writable` and `roles` so the UI can say this up front
+instead of offering a button that always errors.
 
 ### Overrides
 
@@ -93,16 +130,28 @@ keeps the persisted/seeded set.
 | `MONGO_URI` | — | Atlas connection string (required) |
 | `MONGO_DB` | `accounts` | database name |
 | `MONGO_COLLECTION` | `accountHolders` | account documents collection |
+| `MONGO_LISTS_COLLECTION` | `savedList` | lists collection (probe/test override) |
 | `AUTODOP_ENV_FILE` | — | explicit path to a `.env` to read |
 
 Environment variables win over the `.env` file. `src-tauri/.env` is gitignored;
 `src-tauri/.env.example` is the committed template.
 
+### Probing the cluster
+
+```bash
+cd src-tauri && cargo run --example db_probe     # read-only; prints field names, never values
+MONGO_LISTS_COLLECTION=savedList_probe cargo run --example db_probe   # adds a write round-trip
+```
+
+The write probe only ever touches the collection named by
+`MONGO_LISTS_COLLECTION`, and drops it again afterwards — `savedList` is never
+modified by it.
+
 ## Notes and limits
 
 - **Rebate** — `scraper.py` needs one rebate value per account (`1` = "no
-  rebate, just pay"). The UI sends `1` for every account; the account model has
-  no rebate field yet.
+  rebate, just pay"). Generate sends each account's stored rebate, falling back
+  to `1` when a list has none.
 - **Runtime** — a run logs in once and can take minutes (Selenium waits up to
   360 s on the DOP login alone). The backend allows 3600 s, then kills it.
 - **Distribution** — the app currently launches the machine's own Python +

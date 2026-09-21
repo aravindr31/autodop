@@ -52,6 +52,7 @@ function ItemRow({ listId, account }: { listId: string; account: Account }): Rea
  */
 function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[] }): React.ReactElement {
   const { ready, info } = useDesktop();
+  const accounts = useStore((s) => s.accounts);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
 
@@ -68,9 +69,21 @@ function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[
     }
     setBusy(true);
     setProgress('Starting scraper…');
-    // Rebate 1 = "no rebate, just pay" (the account model has no rebate field).
+    // Rebates come from the list when Atlas supplied them; 1 = "no rebate, just pay".
+    const entries = list.accountIds.flatMap((id) => {
+      const account = accounts.find((a) => a._id === id);
+      return account && account.Number
+        ? [{ number: account.Number, rebate: list.rebates?.[id] ?? 1 }]
+        : [];
+    });
+    const payload =
+      entries.length > 0 ? entries : numbers.map((number) => ({ number, rebate: 1 }));
     const res = await generateLists([
-      { name: list.name, numbers, rebate: numbers.map(() => 1) },
+      {
+        name: list.name,
+        numbers: payload.map((entry) => entry.number),
+        rebate: payload.map((entry) => entry.rebate),
+      },
     ]);
     setBusy(false);
     setProgress('');

@@ -28,9 +28,11 @@ export default function App(): React.ReactElement {
   const lists = useStore((s) => s.lists);
   const activeListId = useStore((s) => s.activeListId);
   const activeList = lists.find((l) => l.id === activeListId);
-  // totalsOf is safe for a missing/unset list id — unconditional so the hook
-  // count never changes between renders (React rules).
-  const activeTotals = useStore((s) => s.totalsOf(activeListId));
+  // totalsOf returns a fresh object each call — selecting it would be a new
+  // snapshot identity every render (React "../#infinite-loop" warning). Select
+  // primitives instead so the snapshot is cacheable/stable.
+  const activeCount = useStore((s) => s.totalsOf(activeListId).count);
+  const activeAmount = useStore((s) => s.totalsOf(activeListId).amount);
 
   const [tab, setTab] = useState<Tab>('accounts');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -74,7 +76,7 @@ export default function App(): React.ReactElement {
           <div className="hidden items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 sm:flex">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Active</span>
             <span className="text-sm font-medium text-slate-800">{activeList?.name ?? '—'}</span>
-            <PillHost count={activeTotals.count} amount={activeTotals.amount} />
+            <PillHost count={activeCount} amount={activeAmount} />
           </div>
 
           {/* Tabs */}

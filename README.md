@@ -114,14 +114,17 @@ The probe reports the authenticated roles, and this connection is
 user is not allowed to do action [update] on [accounts.savedList]
 ```
 
-So **Load lists** and both **Reload accounts** paths work, but **Save lists to
-Atlas** is disabled in the UI with the reason shown. To enable it, give that
-Atlas user the `readWrite` role on the `accounts` database (Atlas → Database
-Access → Edit User → Built-in Role). Nothing is broken meanwhile — the failing
-call is refused cleanly rather than half-applied.
+So **Load lists** and **Reload accounts** work today, and **Save lists to Atlas**
+is live in the UI and ready to use — it will simply be refused by Atlas until you
+grant write access. Read-only is a deliberate starting point here; switch the
+role when you're ready.
 
-`db_status` returns `writable` and `roles` so the UI can say this up front
-instead of offering a button that always errors.
+The refusal is handled honestly: the toast says the user is read-only and names
+the database to grant `readWrite` on, rather than showing the raw Atlas error.
+Nothing is half-applied — a rejected write changes nothing.
+
+`db_status` returns `writable` and `roles`, so the panel can state this up front
+instead of leaving you to guess why a save failed.
 
 ### Overrides
 

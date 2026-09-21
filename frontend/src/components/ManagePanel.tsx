@@ -278,7 +278,14 @@ function DatabaseSection(): React.ReactElement {
     const res = await saveLists(store.lists, store.activeListId);
     setBusy(false);
     if (!res.ok || !res.lists) {
-      notify(res.error ?? 'Saving lists failed', 'error');
+      const message = res.error ?? 'Saving lists failed';
+      // Atlas phrasing when the user lacks write privileges.
+      notify(
+        /not allowed to do action/i.test(message)
+          ? `Atlas refused the write — this user is read-only. Grant readWrite on the ${status?.db ?? 'accounts'} database.`
+          : message,
+        'error',
+      );
       return;
     }
     // Adopt the stored ids so the next save updates instead of duplicating.
@@ -325,11 +332,11 @@ function DatabaseSection(): React.ReactElement {
             <Button
               variant="secondary"
               className="!w-full"
-              disabled={busy || !status?.connected || !status?.writable}
+              disabled={busy || !status?.connected}
               onClick={() => void pushLists()}
               title={
                 status && status.writable === false
-                  ? `This Atlas user is read-only (${(status.roles ?? []).join(', ') || 'no roles'})`
+                  ? `Ready to use — Atlas will refuse it until this user gets readWrite (now: ${(status.roles ?? []).join(', ') || 'no roles'})`
                   : undefined
               }
             >
@@ -337,11 +344,11 @@ function DatabaseSection(): React.ReactElement {
             </Button>
           </div>
           {status?.connected && status.writable === false ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-amber-600">
-              Your Atlas user is <strong>read-only</strong> ({(status.roles ?? []).join(', ') || 'no roles'}),
-              so lists cannot be written back. Give it <code className="font-mono">readWrite</code> on the{' '}
-              <code className="font-mono">{status.db}</code> database to enable Save. Loading and generating
-              work fine as-is.
+            <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+              Saving is wired up and ready to use. This Atlas user is currently{' '}
+              <strong>read-only</strong> ({(status.roles ?? []).join(', ') || 'no roles'}), so Atlas will
+              refuse the write until you grant <code className="font-mono">readWrite</code> on the{' '}
+              <code className="font-mono">{status.db}</code> database.
             </p>
           ) : (
             <p className="mt-2 text-[11px] leading-relaxed text-slate-400">

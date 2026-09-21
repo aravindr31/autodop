@@ -85,6 +85,20 @@ PUBLIC_BACKEND_API_URL=https://api.example.com/submit
 
 The backend itself is out of scope (`spec.md` §8 — handled separately).
 
+## Desktop shell (Selenium)
+
+A plain browser cannot start a local process, so **Generate (DOP)** — which runs
+`scraper.py` — only works when the app is loaded by the pywebview desktop host:
+
+```bash
+cd frontend && npm run build && cd ..
+python3 -m pip install -r desktop/requirements.txt
+python3 desktop/main.py
+```
+
+See `desktop/README.md`. In a browser the button stays visible but explains that
+the shell is required (`src/lib/bridge.ts` reports `ready: false`).
+
 ## Project layout
 
 ```

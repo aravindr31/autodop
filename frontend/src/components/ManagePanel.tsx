@@ -4,11 +4,12 @@
  * out. Account mutations hit the live store and persist; the credential gate
  * is client-side (see `src/lib/auth.ts`).
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../lib/store';
 import { matchesQuery, denominationLabel } from '../lib/format';
 import { notify } from '../lib/toast';
-import { X, Plus, Trash, LogOut, Search, KeyRound } from 'lucide-react';
+import { saveCredentials, useDesktop } from '../lib/bridge';
+import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal } from 'lucide-react';
 import { Button, Pill } from './ui';
 
 const FIELD =
@@ -158,6 +159,64 @@ function ChangePasswordSection(): React.ReactElement {
   );
 }
 
+function DesktopSection(): React.ReactElement {
+  const { ready, info } = useDesktop();
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [configured, setConfigured] = useState(false);
+
+  useEffect(() => {
+    if (info) setConfigured(info.credentials);
+  }, [info]);
+
+  const save = async () => {
+    if (!username.trim() || !password) {
+      notify('Username and password are both required', 'error');
+      return;
+    }
+    setBusy(true);
+    const res = await saveCredentials(username.trim(), password);
+    setBusy(false);
+    if (res.ok) {
+      notify('DOP credentials saved to desktop/.env', 'success');
+      setConfigured(true);
+      setUsername('');
+      setPassword('');
+    } else {
+      notify(res.error ?? 'Could not save credentials', 'error');
+    }
+  };
+
+  return (
+    <Section title="DOP Credentials (desktop shell)">
+      {ready ? (
+        <>
+          <p className="mb-2 flex items-center gap-1.5 text-xs text-slate-500">
+            <Terminal className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              {configured ? 'Configured.' : 'Not configured yet.'} Written to <code>desktop/.env</code> by
+              the Python host — never stored in the browser.
+            </span>
+          </p>
+          <div className="flex flex-col gap-2">
+            <input aria-label="DOP username" value={username} onChange={(e) => setUsername(e.currentTarget.value)} className={FIELD} placeholder="DOP username" />
+            <input type="password" aria-label="DOP password" value={password} onChange={(e) => setPassword(e.currentTarget.value)} className={FIELD} placeholder="DOP password" />
+            <Button variant="secondary" className="!w-full" disabled={busy} onClick={() => void save()}>
+              <KeyRound className="h-4 w-4" />Save credentials
+            </Button>
+          </div>
+        </>
+      ) : (
+        <p className="text-xs leading-relaxed text-slate-500">
+          Requires the desktop shell — in a browser the Generate button cannot reach Selenium. Launch with{' '}
+          <code className="rounded bg-slate-100 px-1 font-mono">python3 desktop/main.py</code>.
+        </p>
+      )}
+    </Section>
+  );
+}
+
 export default function ManagePanel({ onClose }: { onClose: () => void }): React.ReactElement {
   const store = useStore.getState();
   const accounts = useStore((s) => s.accounts);
@@ -182,6 +241,7 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
           <AddAccountSection />
           <DeleteAccountSection />
           <ChangePasswordSection />
+          <DesktopSection />
         </div>
 
         <div className="mt-4 border-t border-slate-200 pt-3">

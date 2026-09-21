@@ -4,13 +4,14 @@
  * Remove, Copy numbers, Clear, and backend submission to a configurable
  * endpoint.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../lib/store';
-import type { Account } from '../lib/types';
+import type { Account, AccountList } from '../lib/types';
 import { submitList } from '../lib/api';
+import { generateLists, onProgress, useDesktop } from '../lib/bridge';
 import { formatINR, denominationLabel } from '../lib/format';
 import { notify } from '../lib/toast';
-import { Copy, Send, Trash, ChevronDown } from 'lucide-react';
+import { Copy, Send, Trash, ChevronDown, Play } from 'lucide-react';
 import { Button, EmptyState, Pill, IconButton } from './ui';
 
 function copyText(text: string): boolean {
@@ -44,6 +45,66 @@ function ItemRow({ listId, account }: { listId: string; account: Account }): Rea
   );
 }
 
+/**
+ * "Generate (DOP)" — hands this list's account numbers to scraper.py through
+ * the pywebview desktop shell. In a plain browser there is no bridge, so the
+ * button explains that instead of silently doing nothing.
+ */
+function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[] }): React.ReactElement {
+  const { ready, info } = useDesktop();
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState('');
+
+  useEffect(() => onProgress((message) => setProgress(message)), []);
+
+  const run = async () => {
+    if (!ready) {
+      notify('Generate needs the desktop shell: run python3 desktop/main.py', 'error');
+      return;
+    }
+    if (numbers.length === 0) {
+      notify(`No account numbers in ${list.name} yet.`, 'error');
+      return;
+    }
+    setBusy(true);
+    setProgress('Starting scraper…');
+    // Rebate 1 = "no rebate, just pay" (the account model has no rebate field).
+    const res = await generateLists([
+      { name: list.name, numbers, rebate: numbers.map(() => 1) },
+    ]);
+    setBusy(false);
+    setProgress('');
+    if (!res.ok) {
+      notify(res.error ?? 'Generate failed', 'error');
+      return;
+    }
+    const rows = res.results ?? [];
+    const succeeded = rows.filter((r) => r.status === 'success').length;
+    const allOk = rows.length > 0 && succeeded === rows.length;
+    notify(
+      allOk
+        ? `Generated ${succeeded} list(s) successfully`
+        : `Generated ${succeeded}/${rows.length} list(s) — check logs`,
+      allOk ? 'success' : 'error',
+    );
+  };
+
+  const hint = !ready
+    ? 'Available in the desktop shell (python3 desktop/main.py)'
+    : info && !info.credentials
+      ? 'Add DOP credentials to desktop/.env first'
+      : `Run scraper.py for ${numbers.length} account(s)`;
+
+  return (
+    <>
+      <Button variant="secondary" size="sm" disabled={busy} onClick={() => void run()} title={hint}>
+        <Play className="h-4 w-4" />{busy ? 'Generating…' : 'Generate (DOP)'}
+      </Button>
+      {progress ? <span className="text-[11px] text-slate-500">{progress}</span> : null}
+    </>
+  );
+}
+
 function ListCard({ listId }: { listId: string }): React.ReactElement {
   const store = useStore.getState();
   const accounts = useStore((s) => s.accounts);
@@ -51,6 +112,10 @@ function ListCard({ listId }: { listId: string }): React.ReactElement {
   if (!list || list.accountIds.length === 0) return <span className="hidden" />;
 
   const totals = store.totalsOf(listId);
+  const numbers = list.accountIds.flatMap((id) => {
+    const acc = accounts.find((a) => a._id === id);
+    return acc && acc.Number ? [acc.Number] : [];
+  });
   const [expanded, setExpanded] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -118,6 +183,7 @@ function ListCard({ listId }: { listId: string }): React.ReactElement {
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 bg-slate-50/50 px-4 py-2.5">
             <Button variant="secondary" size="sm" onClick={onCopy}><Copy className="h-4 w-4" />Copy numbers</Button>
             <Button variant="danger" size="sm" onClick={onClear}><Trash className="h-4 w-4" />Clear list</Button>
+            <GenerateButton list={list} numbers={numbers} />
             <div className="min-w-[1px] flex-1" />
             <Button
               variant="primary"

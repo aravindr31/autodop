@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core capabilities for the AutoDOP window. The scraper commands are app-defined (not plugin commands), so they need no extra permission entries.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

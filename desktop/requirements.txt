@@ -1,6 +1,0 @@
-# Desktop shell (native window) — no API server involved.
-pywebview>=5.0
-
-# Used by scraper.py (Selenium + ChromeDriver download).
-selenium>=4.20
-webdriver-manager>=4.0

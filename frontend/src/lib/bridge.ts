@@ -1,12 +1,15 @@
 /**
- * Desktop-shell bridge (pywebview).
+ * Desktop bridge (Tauri).
  *
- * When the app is loaded by the pywebview desktop host (desktop/main.py) a
- * `window.pywebview.api` object is injected, letting a click in the UI call
- * Python *in-process* — no HTTP API server, no port to manage. In a normal
- * browser this module reports `ready: false` and callers fall back to a hint.
+ * When the page runs inside the Tauri shell, `invoke()` calls straight into the
+ * Rust backend, which can spawn `scraper.py` as a local process — exactly what
+ * a plain browser page is forbidden from doing. Outside the shell (e.g. running
+ * `npm run dev` in `frontend/` alone) `isDesktop()` is false and callers show a
+ * hint instead of failing silently.
  */
 import { useEffect, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 export interface GenList {
   name: string;
@@ -31,76 +34,62 @@ export interface AppInfo {
   python: string;
 }
 
-interface PywebviewApi {
-  app_info(): Promise<AppInfo>;
-  generate_lists(lists: GenList[]): Promise<GenResult>;
-  set_credentials(username: string, password: string): Promise<{ ok: boolean; error?: string }>;
-}
+/** Event name the Rust side streams scraper output on. */
+const PROGRESS_EVENT = 'scraper-progress';
 
 declare global {
   interface Window {
-    pywebview?: { api: PywebviewApi };
-    __autodopProgress?: (message: string) => void;
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
-/** True once pywebview has injected its API into the page. */
+/** True when running inside the Tauri webview. */
 export function isDesktop(): boolean {
-  return typeof window !== 'undefined' && Boolean(window.pywebview?.api);
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
-/**
- * Resolve when the bridge is available (or after `timeoutMs`). pywebview
- * injects the API asynchronously and fires a `pywebviewready` event.
- */
-export function waitForBridge(timeoutMs = 3000): Promise<boolean> {
-  if (isDesktop()) return Promise.resolve(true);
-  if (typeof window === 'undefined') return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const done = (value: boolean) => {
-      window.removeEventListener('pywebviewready', onReady);
-      resolve(value);
-    };
-    const onReady = () => done(isDesktop());
-    window.addEventListener('pywebviewready', onReady);
-    setTimeout(() => done(isDesktop()), timeoutMs);
-  });
+/** Tauri injects its API before page scripts run, so this resolves at once. */
+export function waitForBridge(): Promise<boolean> {
+  return Promise.resolve(isDesktop());
 }
 
 export async function desktopInfo(): Promise<AppInfo | null> {
-  const api = window.pywebview?.api;
-  if (!api) return null;
+  if (!isDesktop()) return null;
   try {
-    return await api.app_info();
+    return await invoke<AppInfo>('app_info');
   } catch {
     return null;
   }
 }
 
-/** Register the progress callback the Python host calls back into. */
+/** Subscribe to live scraper output. Returns an unsubscribe function. */
 export function onProgress(cb: (message: string) => void): () => void {
-  if (typeof window === 'undefined') return () => {};
-  window.__autodopProgress = cb;
+  if (!isDesktop()) return () => {};
+  const pending = listen<string>(PROGRESS_EVENT, (event) => cb(event.payload));
   return () => {
-    if (window.__autodopProgress === cb) delete window.__autodopProgress;
+    void pending.then((unlisten) => unlisten()).catch(() => {});
   };
 }
 
 export async function generateLists(lists: GenList[]): Promise<GenResult> {
-  const api = window.pywebview?.api;
-  if (!api) return { ok: false, error: 'Desktop shell not available — open the app via desktop/main.py.' };
+  if (!isDesktop()) {
+    return { ok: false, error: 'Generate needs the desktop app — launch it with `npm run dev` (Tauri).' };
+  }
   try {
-    return await api.generate_lists(lists);
+    return await invoke<GenResult>('generate_lists', { lists });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-export async function saveCredentials(username: string, password: string): Promise<{ ok: boolean; error?: string }> {
-  const api = window.pywebview?.api;
-  if (!api) return { ok: false, error: 'Desktop shell not available.' };
+export async function saveCredentials(
+  username: string,
+  password: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
   try {
-    return await api.set_credentials(username, password);
+    await invoke('set_credentials', { username, password });
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

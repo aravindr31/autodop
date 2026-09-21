@@ -59,7 +59,7 @@ function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[
 
   const run = async () => {
     if (!ready) {
-      notify('Generate needs the desktop shell: run python3 desktop/main.py', 'error');
+      notify('Generate needs the desktop app — launch it with `npm run dev`', 'error');
       return;
     }
     if (numbers.length === 0) {
@@ -90,9 +90,9 @@ function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[
   };
 
   const hint = !ready
-    ? 'Available in the desktop shell (python3 desktop/main.py)'
+    ? 'Available in the desktop app (npm run dev)'
     : info && !info.credentials
-      ? 'Add DOP credentials to desktop/.env first'
+      ? 'Add DOP credentials in Manage → DOP Credentials first'
       : `Run scraper.py for ${numbers.length} account(s)`;
 
   return (

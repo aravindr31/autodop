@@ -189,14 +189,14 @@ function DesktopSection(): React.ReactElement {
   };
 
   return (
-    <Section title="DOP Credentials (desktop shell)">
+    <Section title="DOP Credentials">
       {ready ? (
         <>
           <p className="mb-2 flex items-center gap-1.5 text-xs text-slate-500">
             <Terminal className="h-3.5 w-3.5 shrink-0" />
             <span>
-              {configured ? 'Configured.' : 'Not configured yet.'} Written to <code>desktop/.env</code> by
-              the Python host — never stored in the browser.
+              {configured ? 'Configured.' : 'Not configured yet.'} Stored by the Rust backend in this
+              app&rsquo;s config folder — never in the browser.
             </span>
           </p>
           <div className="flex flex-col gap-2">
@@ -206,11 +206,16 @@ function DesktopSection(): React.ReactElement {
               <KeyRound className="h-4 w-4" />Save credentials
             </Button>
           </div>
+          {info && !info.scraper_present ? (
+            <p className="mt-2 text-[11px] text-rose-600">
+              scraper.py was not found — set <code className="font-mono">AUTODOP_SCRAPER</code> to its path.
+            </p>
+          ) : null}
         </>
       ) : (
         <p className="text-xs leading-relaxed text-slate-500">
-          Requires the desktop shell — in a browser the Generate button cannot reach Selenium. Launch with{' '}
-          <code className="rounded bg-slate-100 px-1 font-mono">python3 desktop/main.py</code>.
+          Available in the desktop app only — a browser cannot run Selenium. Launch it with{' '}
+          <code className="rounded bg-slate-100 px-1 font-mono">npm run dev</code>.
         </p>
       )}
     </Section>

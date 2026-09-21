@@ -85,19 +85,21 @@ PUBLIC_BACKEND_API_URL=https://api.example.com/submit
 
 The backend itself is out of scope (`spec.md` §8 — handled separately).
 
-## Desktop shell (Selenium)
+## Desktop app (Tauri)
 
 A plain browser cannot start a local process, so **Generate (DOP)** — which runs
-`scraper.py` — only works when the app is loaded by the pywebview desktop host:
+`scraper.py` — only works inside the Tauri desktop app, which wraps this build:
 
 ```bash
-cd frontend && npm run build && cd ..
-python3 -m pip install -r desktop/requirements.txt
-python3 desktop/main.py
+# from the repo root
+npm install
+npm run dev        # dev window (starts the Astro dev server too)
+npm run build      # packaged .app / .dmg (or .msi on Windows)
 ```
 
-See `desktop/README.md`. In a browser the button stays visible but explains that
-the shell is required (`src/lib/bridge.ts` reports `ready: false`).
+The desktop app is configured in `src-tauri/` (Rust). In a browser the button
+stays visible but explains that the desktop app is required
+(`src/lib/bridge.ts` reports `ready: false`).
 
 ## Project layout
 

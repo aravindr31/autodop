@@ -3,7 +3,6 @@
  * configurable endpoint and report success/failure back to the UI.
  */
 import type { Account, AccountList } from './types';
-import { accountById } from './accounts';
 
 export interface SubmitResult {
   ok: boolean;
@@ -25,7 +24,17 @@ function toDocument(account: Account, listName: string): Record<string, unknown>
   };
 }
 
-export async function submitList(list: AccountList, endpoint: string): Promise<SubmitResult> {
+/**
+ * Resolve an account by id. A resolver is injected rather than importing the
+ * live store here so this module stays a pure library.
+ */
+export type AccountResolver = (id: string) => Account | undefined;
+
+export async function submitList(
+  list: AccountList,
+  endpoint: string,
+  accountOf: AccountResolver,
+): Promise<SubmitResult> {
   const trimmed = (endpoint ?? '').trim();
   if (!trimmed) {
     return { ok: false, message: 'No backend endpoint configured yet.' };
@@ -33,7 +42,7 @@ export async function submitList(list: AccountList, endpoint: string): Promise<S
 
   const docs: Record<string, unknown>[] = [];
   for (const id of list.accountIds) {
-    const acc = accountById(id);
+    const acc = accountOf(id);
     if (acc) docs.push(toDocument(acc, list.name));
   }
 

@@ -18,6 +18,15 @@ export interface Account {
   addedIn: string;
 }
 
+/** Fields the user supplies when creating a new account. */
+export interface NewAccountInput {
+  Number: string;
+  Name: string;
+  Denomination: string;
+  CNumber: string;
+  Ref_Number: string;
+}
+
 /** A user-defined, persistent list of account references. */
 export interface AccountList {
   id: string;
@@ -26,9 +35,17 @@ export interface AccountList {
   accountIds: string[];
 }
 
+/** Client-side session credential (salted SHA-256). Pending the real backend. */
+export interface AuthCredential {
+  salt: string;
+  hash: string;
+}
+
 /** Subset of app state persisted to localStorage. */
 export interface PersistedState {
+  accounts: Account[];
   lists: AccountList[];
   activeListId: string;
   submitEndpoint: string;
+  auth: AuthCredential | null;
 }

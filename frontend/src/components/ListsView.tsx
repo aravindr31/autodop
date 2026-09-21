@@ -6,7 +6,7 @@
  */
 import { useState } from 'react';
 import { useStore } from '../lib/store';
-import { accountById } from '../lib/accounts';
+import type { Account } from '../lib/types';
 import { submitList } from '../lib/api';
 import { formatINR, denominationLabel } from '../lib/format';
 import { notify } from '../lib/toast';
@@ -21,10 +21,8 @@ function copyText(text: string): boolean {
   return false;
 }
 
-function ItemRow({ listId, accountId }: { listId: string; accountId: string }): React.ReactElement {
+function ItemRow({ listId, account }: { listId: string; account: Account }): React.ReactElement {
   const store = useStore.getState();
-  const account = accountById(accountId);
-  if (!account) return <tr className="hidden" />;
   return (
     <tr className="border-b border-slate-100 last:border-0">
       <td className="px-3 py-2 text-sm font-medium text-slate-800">{account.Name}</td>
@@ -35,7 +33,7 @@ function ItemRow({ listId, accountId }: { listId: string; accountId: string }): 
           label={`Remove ${account.Name}`}
           danger
           onClick={() => {
-            store.removeFromList(listId, accountId);
+            store.removeFromList(listId, account._id);
             notify(`${account.Name} removed`, 'info');
           }}
         >
@@ -48,7 +46,8 @@ function ItemRow({ listId, accountId }: { listId: string; accountId: string }): 
 
 function ListCard({ listId }: { listId: string }): React.ReactElement {
   const store = useStore.getState();
-  const list = store.lists.find((l) => l.id === listId);
+  const accounts = useStore((s) => s.accounts);
+  const list = useStore((s) => s.lists.find((l) => l.id === listId));
   if (!list || list.accountIds.length === 0) return <span className="hidden" />;
 
   const totals = store.totalsOf(listId);
@@ -56,7 +55,10 @@ function ListCard({ listId }: { listId: string }): React.ReactElement {
   const [submitting, setSubmitting] = useState(false);
 
   const onCopy = () => {
-    const numbers = list.accountIds.map((id) => accountById(id)?.Number).filter(Boolean).join(', ');
+    const numbers = list.accountIds
+      .map((id) => accounts.find((a) => a._id === id)?.Number)
+      .filter(Boolean)
+      .join(', ');
     copyText(numbers);
     notify(`Copied ${list.accountIds.length} number(s) to clipboard`, 'success');
   };
@@ -68,7 +70,9 @@ function ListCard({ listId }: { listId: string }): React.ReactElement {
 
   const onSubmit = async () => {
     setSubmitting(true);
-    const res = await submitList(list, store.submitEndpoint);
+    // Resolve from the freshest state at call time.
+    const accountOf = (id: string) => useStore.getState().accounts.find((a) => a._id === id);
+    const res = await submitList(list, store.submitEndpoint, accountOf);
     notify(res.message, res.ok ? 'success' : 'error');
     setSubmitting(false);
   };
@@ -104,7 +108,10 @@ function ListCard({ listId }: { listId: string }): React.ReactElement {
               </tr>
             </thead>
             <tbody>
-              {list.accountIds.map((id) => <ItemRow key={id} listId={listId} accountId={id} />)}
+              {list.accountIds.flatMap((id) => {
+                const acc = accounts.find((a) => a._id === id);
+                return acc ? [<ItemRow key={id} listId={listId} account={acc} />] : [];
+              })}
             </tbody>
           </table>
 

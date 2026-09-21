@@ -2,9 +2,14 @@ import raw from '../data/accounts.json';
 import type { Account } from './types';
 
 /**
- * Loads the development dataset (spec §7: "The initial account data can be a
+ * Seed dataset for development (spec §7: "The initial account data can be a
  * static JSON import"). The raw documents carry MongoDB's BSON form
  * (`_id: { $oid: ... }`) — normalize to a plain hex string key.
+ *
+ * This is the *seed* only: the live account list is owned by the store
+ * (see `src/lib/store.ts`) so accounts can be added/deleted and persist.
+ * Replace `src/data/accounts.json` with real data; the seed is applied on a
+ * fresh (empty) store.
  */
 function normalize(row: Record<string, unknown>): Account {
   const _id = row._id as unknown;
@@ -25,13 +30,4 @@ function normalize(row: Record<string, unknown>): Account {
   };
 }
 
-export const ACCOUNTS: Account[] = (raw as Record<string, unknown>[]).map(normalize);
-
-const byId = new Map<string, Account>();
-for (const a of ACCOUNTS) byId.set(a._id, a);
-
-export function accountById(id: string): Account | undefined {
-  return byId.get(id);
-}
-
-export const TOTAL_ACCOUNTS: number = ACCOUNTS.length;
+export const SEED_ACCOUNTS: Account[] = (raw as Record<string, unknown>[]).map(normalize);

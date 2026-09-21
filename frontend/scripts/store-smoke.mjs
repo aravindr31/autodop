@@ -44,6 +44,9 @@ export async function runSmoke() {
   check('fresh: default named "A"', s0.lists[0].name === 'A');
   check('fresh: active = main', s0.activeListId === s0.lists[0].id);
   check('fresh: totals 0/0', s0.totalsOf(s0.activeListId).count === 0 && s0.totalsOf(s0.activeListId).amount === 0);
+  check('fresh: accounts seeded', Array.isArray(s0.accounts) && s0.accounts.length > 0, `n=${s0.accounts.length}`);
+  check('fresh: no auth credential', s0.auth === null);
+  check('fresh: not logged in (session only)', s0.loggedIn === false);
 
   const s = live();
   const { id: vipId, name: vipName } = s.createList('VIP');
@@ -51,8 +54,8 @@ export async function runSmoke() {
   check('create: active switched to VIP', live().activeListId === vipId);
   check('create: auto-name next letter "B"', live().createList('  ').name === 'B');
 
-  const { ACCOUNTS } = await import(`${BUNDLE}/accounts.mjs`);
-  const acc = ACCOUNTS[0];
+  const { SEED_ACCOUNTS } = await import(`${BUNDLE}/accounts.mjs`);
+  const acc = SEED_ACCOUNTS[0];
   const denom = Number(acc.Denomination.replace(/\D/g, ''));
 
   s.setActiveList(vipId);
@@ -66,7 +69,7 @@ export async function runSmoke() {
   s.addToActive(acc._id); // duplicate -> must be a no-op
   check('noop: duplicate add ignored', live().lists.find((l) => l.id === vipId).accountIds.length === 1);
 
-  const acc2 = ACCOUNTS.find((a) => a._id !== acc._id);
+  const acc2 = SEED_ACCOUNTS.find((a) => a._id !== acc._id);
   s.renameList(vipId, 'VIP Club');
   s.setActiveList(live().lists.find((l) => l.id !== vipId).id);
   const mainId = live().activeListId;
@@ -80,9 +83,38 @@ export async function runSmoke() {
   s.clearList(vipId);
   check('clear: VIP empty', live().totalsOf(vipId).count === 0);
 
-  check('endpoint: trimmed', (s.setSubmitEndpoint('  https://x  '), live().submitEndpoint) === 'https://x');
+  // ---- account mutations ----
+  const added = s.addAccount({ Number: '9999000011', Name: 'NEW Sample', Denomination: '50', CNumber: 'CN-1', Ref_Number: 'REF-1' });
+  check('addAccount: id assigned', typeof added._id === 'string' && added._id.length > 0);
+  check('addAccount: in store', live().accounts.some((a) => a._id === added._id));
+  s.setActiveList(vipId);
+  s.addToActive(added._id);
+  check('addAccount: can be added to a list', live().totalsOf(vipId).count > 0);
+  check('deleteAccount: removes it', s.deleteAccount(added._id) === true);
+  check('deleteAccount: gone from store', !live().accounts.some((a) => a._id === added._id));
+  check('deleteAccount: pulled from lists', !live().isAdded(added._id));
+  check('deleteAccount: unknown id -> false', s.deleteAccount('nope') === false);
+
+  // ---- auth (client-side gate) ----
+  await s.setupPassword('hunter2');
+  check('auth: setup sets credential', live().auth !== null);
+  check('auth: setup logs in', live().loggedIn === true);
+  s.logout();
+  check('auth: logout clears session', live().loggedIn === false);
+  check('auth: wrong password rejected', (await s.login('wrong')) === false && live().loggedIn === false);
+  check('auth: correct password accepted', (await s.login('hunter2')) === true && live().loggedIn === true);
+  s.logout();
+  check('auth: change rejects wrong current', (await s.changePassword('bad', 'x')) === false);
+  check('auth: change accepted', (await s.changePassword('hunter2', 'newpass')) === true);
+  check('auth: new password works', (await s.login('newpass')) === true);
+  check(
+    'auth: old password obsolete',
+    (await s.login('hunter2')) === false && live().loggedIn === true,
+  );
+
   s.setActiveList(vipId);
   s.addToActive(acc._id); // re-add so stage 2 has something to restore
+  check('endpoint: trims', (s.setSubmitEndpoint('  https://x  '), live().submitEndpoint) === 'https://x');
   s.setSubmitEndpoint('https://api.example/v1/batch');
   check('endpoint: persisted value', live().submitEndpoint === 'https://api.example/v1/batch');
 
@@ -96,6 +128,11 @@ export async function runSmoke() {
   check('persist: has 3 lists', blob.lists.length === 3, `n=${blob.lists.length}`);
   check('persist: active id saved', typeof blob.activeListId === 'string' && blob.activeListId.length > 0);
   check('persist: endpoint saved', blob.submitEndpoint === 'https://api.example/v1/batch');
+  check('persist: accounts saved', Array.isArray(blob.accounts) && blob.accounts.length > 0, `n=${blob.accounts.length}`);
+  check(
+    'persist: auth credential saved',
+    blob.auth && typeof blob.auth.salt === 'string' && typeof blob.auth.hash === 'string',
+  );
 
   // ---- stage 2: fresh store instance => state restored from localStorage ----
   console.log('\n--- STAGE 2: reload persisted state ---');
@@ -104,9 +141,12 @@ export async function runSmoke() {
   check('reload: VIP Club present', s2.lists.some((l) => l.name === 'VIP Club'));
   check('reload: active id restored (non-empty)', s2.activeListId.length > 0);
   check('reload: endpoint restored', s2.submitEndpoint === 'https://api.example/v1/batch');
+  check('reload: accounts restored', s2.accounts.length > 0, `n=${s2.accounts.length}`);
+  check('reload: auth credential restored', s2.auth !== null);
+  check('reload: session NOT persisted (logged out)', s2.loggedIn === false);
   const vip = s2.lists.find((l) => l.name === 'VIP Club');
   check('reload: VIP Club has 1 account', vip && vip.accountIds.length === 1, `n=${vip?.accountIds.length}`);
-  const restoredAcc = ACCOUNTS.find((a) => a._id === vip.accountIds[0]);
+  const restoredAcc = s2.accounts.find((a) => a._id === vip.accountIds[0]);
   check(
     'reload: recomputed totals match',
     s2.totalsOf(vip.id).count === 1 &&

@@ -55,6 +55,13 @@ left as-is (BSON `_id: { $oid }` included).
 - **Lists** tab — summary cards (name, item count, total ₹ denomination) that
   expand to show items with **Remove**, plus **Copy numbers**, **Clear list**,
   and **Submit to backend**.
+- **Sign in** — the app gates behind a login (first run asks you to set a
+  password). This is a *client-side* gate only (see `src/lib/auth.ts`); the
+  real credential check ships with the backend.
+- **Manage** (gear, top-right) — **Add New Account**, **Delete Account**
+  (search + confirm), **Change Password**, and **Sign out**. Account
+  additions/deletions hit the live store, reflect immediately in the Accounts
+  tab, and persist.
 
 ## Backend submission
 

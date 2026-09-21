@@ -1,8 +1,10 @@
 /**
  * Application shell (spec): header with active-list chip, Accounts / Lists
  * tabs, an inline sidebar on desktop that becomes a slide-over drawer on
- * mobile, and a global toast stack. All interactive state is reactive via
- * the Zustand store and persists to localStorage.
+ * mobile, a Manage drawer (add/delete account, change password, sign out),
+ * and a global toast stack. All interactive state is reactive via the Zustand
+ * store and persists to localStorage. The shell is gated behind a client-side
+ * login (AuthScreen) until the separately-built backend provides real auth.
  */
 import { useEffect, useState } from 'react';
 import { useStore } from '../lib/store';
@@ -12,9 +14,11 @@ import { SidebarPanel } from './Sidebar';
 import Sidebar from './Sidebar';
 import Browser from './Browser';
 import ListsView from './ListsView';
+import AuthScreen from './AuthScreen';
+import ManagePanel from './ManagePanel';
 import { ToastViewItem } from './ui';
 import type { ToastView } from './ui';
-import { Menu, Check } from 'lucide-react';
+import { Menu, Check, Settings } from 'lucide-react';
 
 type Tab = 'accounts' | 'lists';
 
@@ -25,6 +29,7 @@ const LOGO = (
 );
 
 export default function App(): React.ReactElement {
+  const loggedIn = useStore((s) => s.loggedIn);
   const lists = useStore((s) => s.lists);
   const activeListId = useStore((s) => s.activeListId);
   const activeList = lists.find((l) => l.id === activeListId);
@@ -36,6 +41,7 @@ export default function App(): React.ReactElement {
 
   const [tab, setTab] = useState<Tab>('accounts');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const [toasts, setToasts] = useState<ToastView[]>([]);
 
   useEffect(
@@ -49,6 +55,16 @@ export default function App(): React.ReactElement {
       }),
     [],
   );
+
+  // All hooks above are unconditional; the gate below is a pure render branch.
+  if (!loggedIn) {
+    return (
+      <div className="min-h-screen">
+        <AuthScreen />
+        <ToastStack toasts={toasts} onDismiss={(id) => setToasts((cur) => cur.filter((t) => t.id !== id))} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900 antialiased">
@@ -78,6 +94,17 @@ export default function App(): React.ReactElement {
             <span className="text-sm font-medium text-slate-800">{activeList?.name ?? '—'}</span>
             <PillHost count={activeCount} amount={activeAmount} />
           </div>
+
+          {/* Manage */}
+          <button
+            type="button"
+            aria-label="Manage accounts"
+            title="Manage: add / delete account, change password, sign out"
+            onClick={() => setManageOpen(true)}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm hover:bg-slate-100 hover:text-slate-800"
+          >
+            <Settings className="h-5 w-5" />
+          </button>
 
           {/* Tabs */}
           <nav className="flex rounded-lg bg-slate-100 p-0.5" aria-label="Sections">
@@ -115,6 +142,9 @@ export default function App(): React.ReactElement {
       {/* Mobile drawer */}
       <Sidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
+      {/* Manage drawer */}
+      {manageOpen && <ManagePanel onClose={() => setManageOpen(false)} />}
+
       {/* Toasts */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
         {toasts.map((t) => (
@@ -125,6 +155,14 @@ export default function App(): React.ReactElement {
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+function ToastStack({ toasts, onDismiss }: { toasts: ToastView[]; onDismiss: (id: number) => void }): React.ReactElement {
+  return (
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      {toasts.map((t) => <ToastViewItem key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />)}
     </div>
   );
 }

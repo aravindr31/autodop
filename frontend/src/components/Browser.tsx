@@ -2,9 +2,10 @@
  * Main account display (spec §3.1): a responsive card grid of all accounts
  * with live search (Name / Number / CNumber / Ref_Number) and client-side
  * pagination so "hundreds of objects" stay snappy without virtualization.
+ * Reads the live account list from the store (accounts can be added/deleted).
  */
 import { useState } from 'react';
-import { ACCOUNTS, TOTAL_ACCOUNTS } from '../lib/accounts';
+import type { Account } from '../lib/types';
 import { useStore } from '../lib/store';
 import { matchesQuery, denominationLabel } from '../lib/format';
 import { notify } from '../lib/toast';
@@ -13,9 +14,9 @@ import { Button, EmptyState, Pill } from './ui';
 
 const PAGE_SIZES = [50, 100, 250];
 
-function AccountCard({ id }: { id: string }): React.ReactElement {
+function AccountCard({ account }: { account: Account }): React.ReactElement {
   const store = useStore.getState();
-  const account = ACCOUNTS.find((a) => a._id === id)!;
+  const id = account._id;
   const activeListId = useStore((s) => s.activeListId);
   const inListName = useStore((s) => s.listNameOf(id)); // "" when not in any list
   const inActiveList = useStore((s) => s.lists.find((l) => l.id === s.activeListId)?.accountIds.includes(id) ?? false);
@@ -58,11 +59,12 @@ function AccountCard({ id }: { id: string }): React.ReactElement {
 }
 
 export default function Browser(): React.ReactElement {
+  const accounts = useStore((s) => s.accounts);
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(100);
 
-  const matched = ACCOUNTS.filter((a) => matchesQuery(a, query));
+  const matched = accounts.filter((a) => matchesQuery(a, query));
   const pageCount = Math.max(1, Math.ceil(matched.length / pageSize));
   const current = Math.min(page, pageCount - 1);
   const slice = matched.slice(current * pageSize, (current + 1) * pageSize);
@@ -85,17 +87,17 @@ export default function Browser(): React.ReactElement {
             onChange={(e) => changeQuery(e.currentTarget.value)}
           />
         </div>
-        <Pill tone="neutral">{matched.length.toLocaleString('en-IN')} of {TOTAL_ACCOUNTS.toLocaleString('en-IN')}</Pill>
+        <Pill tone="neutral">{matched.length.toLocaleString('en-IN')} of {accounts.length.toLocaleString('en-IN')}</Pill>
       </div>
 
       {matched.length === 0 ? (
         <EmptyState
           title="No accounts match your search"
-          hint="Try a name, account number, CNumber or reference number."
+          hint="Try a name, account number, CNumber or reference number, or add a new account."
         />
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
-          {slice.map((a) => <AccountCard key={a._id} id={a._id} />)}
+          {slice.map((a) => <AccountCard key={a._id} account={a} />)}
         </div>
       )}
 

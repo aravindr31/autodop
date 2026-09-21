@@ -1,0 +1,21 @@
+---
+import '../styles/global.css';
+import App from '../components/App';
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>AutoDOP · Account List Manager</title>
+    <meta
+      name="description"
+      content="AutoDOP — manage India Post DOP agent accounts into persistent, configurable lists, with live totals and backend submission."
+    />
+  </head>
+  <body>
+    <App client:load />
+  </body>
+</html>

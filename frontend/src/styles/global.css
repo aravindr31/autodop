@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+/* Minimal base layer — Tailwind v4 auto-detects source files, so no @source
+   is required. Kept deliberately thin; the design lives in utility classes. */
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}

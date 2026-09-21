@@ -15,8 +15,9 @@ import {
   loadAccountsFromDb,
   loadLists,
   saveLists,
+  dopCredentialsStatus,
 } from '../lib/bridge';
-import type { DbStatus } from '../lib/bridge';
+import type { DbStatus, DopCredentialStatus } from '../lib/bridge';
 import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database } from 'lucide-react';
 import { Button, Pill } from './ui';
 
@@ -219,6 +220,7 @@ function DesktopSection(): React.ReactElement {
               scraper.py was not found — set <code className="font-mono">AUTODOP_SCRAPER</code> to its path.
             </p>
           ) : null}
+          <CredentialSourceNote />
         </>
       ) : (
         <p className="text-xs leading-relaxed text-slate-500">
@@ -289,7 +291,11 @@ function DatabaseSection(): React.ReactElement {
       return;
     }
     // Adopt the stored ids so the next save updates instead of duplicating.
-    useStore.getState().setLists(res.lists, res.activeId);
+    // Ids can change (a list is matched by name when it has no ObjectId yet),
+    // so follow the active list across by name rather than by id.
+    const activeName = store.lists.find((list) => list.id === store.activeListId)?.name;
+    const activeId = res.lists.find((list) => list.name === activeName)?.id;
+    useStore.getState().setLists(res.lists, activeId);
     notify(`Saved ${res.lists.length} list(s) to Atlas`, 'success');
     void check();
   };
@@ -364,6 +370,47 @@ function DatabaseSection(): React.ReactElement {
         </>
       )}
     </Section>
+  );
+}
+
+/**
+ * Where Generate will get its DOP credentials from.
+ *
+ * Reports the source and the portal id only — the password lives in the Rust
+ * backend and is handed straight to `scraper.py`.
+ */
+function CredentialSourceNote(): React.ReactElement {
+  const [status, setStatus] = useState<DopCredentialStatus | null>(null);
+
+  useEffect(() => {
+    void dopCredentialsStatus().then(setStatus);
+  }, []);
+
+  if (!status) return <span className="hidden" />;
+
+  const source =
+    status.source === 'atlas'
+      ? 'Atlas (users → UserInfo)'
+      : status.source === 'env'
+        ? 'DOP_USERNAME / DOP_PASSWORD'
+        : "this app's config file";
+
+  return (
+    <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+      {status.has_password ? (
+        <>
+          <Pill tone="positive">credentials found</Pill> using{' '}
+          <code className="font-mono">{status.username}</code> from {source}. The password stays in the
+          Rust backend and is passed straight to <code className="font-mono">scraper.py</code>.
+        </>
+      ) : (
+        <>
+          <Pill tone="neutral">no credentials yet</Pill>{' '}
+          {status.detail ??
+            'Save them below, or add FERNET_KEY to src-tauri/.env so they can be read from Atlas.'}
+        </>
+      )}
+    </p>
   );
 }
 

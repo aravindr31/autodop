@@ -208,6 +208,25 @@ export async function saveLists(
   }
 }
 
+/** Which DOP credentials the app would use, and where they come from. */
+export interface DopCredentialStatus {
+  username: string;
+  source: 'env' | 'config' | 'atlas';
+  has_password: boolean;
+  atlas_available: boolean;
+  detail?: string;
+}
+
+/** Credential source + portal id. The password is never part of this. */
+export async function dopCredentialsStatus(): Promise<DopCredentialStatus | null> {
+  if (!isDesktop()) return null;
+  try {
+    return await invoke<DopCredentialStatus>('dop_credentials_status');
+  } catch {
+    return null;
+  }
+}
+
 /** Reactive bridge state for components. */
 export function useDesktop(): { ready: boolean; info: AppInfo | null } {
   const [ready, setReady] = useState(() => isDesktop());

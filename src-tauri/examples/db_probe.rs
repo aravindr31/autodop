@@ -6,7 +6,8 @@
 //!     cd src-tauri && cargo run --example db_probe
 
 use autodop_lib::db::{
-    connect, fetch_lists_with, load_db_config, save_lists_with, InputEntry, InputList,
+    connect, fernet_key, fetch_atlas_credentials_with, fetch_lists_with, load_db_config,
+    save_lists_with, InputEntry, InputList,
 };
 use futures_util::StreamExt;
 use mongodb::bson::{doc, Document};
@@ -96,6 +97,21 @@ fn main() {
                 println!("writable (can save lists): {writable}");
             }
             Err(error) => println!("connectionStatus failed: {error}"),
+        }
+
+        // DOP credentials: confirm the Fernet key really opens the stored
+        // password. Only the length is reported — never the value.
+        match fernet_key(None) {
+            Some(key) => match fetch_atlas_credentials_with(&cfg, &key).await {
+                Ok(creds) => println!(
+                    "dop credentials OK: source={:?} DOP_ID={:?} password={} chars (value withheld)",
+                    creds.source,
+                    creds.username,
+                    creds.password.len()
+                ),
+                Err(error) => println!("dop credentials FAILED: {error}"),
+            },
+            None => println!("FERNET_KEY not configured — credential check skipped"),
         }
 
         // Exercise the real list reader — the production path, not a copy of it.

@@ -447,6 +447,139 @@ pub async fn save_lists_with(cfg: &DbConfig, lists: Vec<InputList>) -> Result<Ve
     fetch_lists_with(cfg).await
 }
 
+// --------------------------------------------------------------------------- //
+// DOP portal credentials (users collection, Fernet-encrypted)                   //
+// --------------------------------------------------------------------------- //
+
+/// The user the old app read (`main.py`: `$match: {_id: ObjectId(...)}`).
+pub const USER_ID: &str = "5fbf919c87da8228f87bd62f";
+/// Collection holding the login record and `UserInfo`.
+pub const USERS_COLLECTION: &str = "users";
+
+/// Where the DOP portal credentials came from.
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CredentialSource {
+    /// `DOP_USERNAME` / `DOP_PASSWORD` in the environment or a `.env`.
+    Env,
+    /// The app-config `credentials.json`.
+    Config,
+    /// The `users` collection in Atlas, decrypted with `FERNET_KEY`.
+    Atlas,
+}
+
+/// What the UI may know about the credentials. Never carries the password.
+#[derive(Debug, Serialize)]
+pub struct DopCredentialStatus {
+    pub username: String,
+    pub source: CredentialSource,
+    pub has_password: bool,
+    /// Whether Atlas holds a user document with a password we can decrypt.
+    pub atlas_available: bool,
+    /// Why Atlas could not supply them, when it could not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// DOP portal credentials, Rust-side only.
+///
+/// Deliberately **not** `Serialize`: the password goes to `scraper.py` and
+/// nowhere else, so it cannot leak into the webview by accident.
+#[derive(Clone)]
+pub struct DopCredentials {
+    pub username: String,
+    pub password: String,
+    pub source: CredentialSource,
+}
+
+/// The Fernet key, exactly as the Python app read it (`FERNET_KEY`).
+pub fn fernet_key(app: Option<&AppHandle>) -> Option<String> {
+    setting(app, "FERNET_KEY").filter(|key| !key.trim().is_empty())
+}
+
+fn bson_type_name(value: &Bson) -> &'static str {
+    match value {
+        Bson::String(_) => "string",
+        Bson::Binary(_) => "binary",
+        Bson::ObjectId(_) => "objectId",
+        Bson::Document(_) => "document",
+        Bson::Array(_) => "array",
+        Bson::Double(_) => "double",
+        Bson::Boolean(_) => "bool",
+        Bson::Null => "null",
+        _ => "other",
+    }
+}
+
+/// Decrypt `UserInfo.DOP_password`, accepting either storage type.
+fn decrypt_stored_password(key: &str, stored: &Bson) -> Result<String, String> {
+    let token = match stored {
+        Bson::String(text) => text.clone(),
+        Bson::Binary(binary) => String::from_utf8(binary.bytes.clone())
+            .map_err(|_| "UserInfo.DOP_password binary is not UTF-8".to_string())?,
+        other => {
+            return Err(format!(
+                "UserInfo.DOP_password is a {}, expected string or binary",
+                bson_type_name(other)
+            ))
+        }
+    };
+    crate::crypt::decrypt(key, &token)
+}
+
+/// Load the DOP credentials from the `users` collection, decrypting the password.
+pub async fn fetch_atlas_credentials(app: &AppHandle) -> Result<DopCredentials, String> {
+    let cfg = load_db_config(Some(app)).ok_or(NO_URI)?;
+    let key =
+        fernet_key(Some(app)).ok_or("FERNET_KEY is not configured (add it to src-tauri/.env).")?;
+    fetch_atlas_credentials_with(&cfg, &key).await
+}
+
+/// The actual query + decryption — takes a config and key so it can be
+/// exercised without an app handle.
+pub async fn fetch_atlas_credentials_with(
+    cfg: &DbConfig,
+    key: &str,
+) -> Result<DopCredentials, String> {
+    let client = connect(cfg).await?;
+
+    let filter = match ObjectId::parse_str(USER_ID) {
+        Ok(oid) => doc! { "_id": oid },
+        Err(_) => doc! { "_id": USER_ID },
+    };
+    let user = client
+        .database(&cfg.db)
+        .collection::<Document>(USERS_COLLECTION)
+        .find_one(filter)
+        .await
+        .map_err(|error| format!("query failed: {error}"))?
+        .ok_or_else(|| format!("no user {USER_ID} in {}.{USERS_COLLECTION}", cfg.db))?;
+
+    let info = user
+        .get_document("UserInfo")
+        .ok()
+        .cloned()
+        .unwrap_or_default();
+    let username = info.get_str("DOP_ID").unwrap_or("").trim().to_string();
+    if username.is_empty() {
+        return Err("UserInfo.DOP_ID is empty".to_string());
+    }
+
+    let stored = info
+        .get("DOP_password")
+        .ok_or("UserInfo.DOP_password is missing")?;
+    let password = decrypt_stored_password(&key, stored)?;
+    if password.trim().is_empty() {
+        return Err("the decrypted DOP password is empty".to_string());
+    }
+
+    Ok(DopCredentials {
+        username,
+        password,
+        source: CredentialSource::Atlas,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

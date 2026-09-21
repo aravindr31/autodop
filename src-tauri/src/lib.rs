@@ -15,6 +15,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub mod crypt;
 pub mod db;
 
 /// Selenium waits up to 360s for the DOP login alone; allow a long ceiling.
@@ -113,30 +114,68 @@ fn credentials_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("credentials.json"))
 }
 
-fn load_credentials(app: &AppHandle) -> (String, String) {
+/// Credentials from the environment/`.env` or the app-config file, if present.
+fn load_local_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
     let env_user = std::env::var("DOP_USERNAME").unwrap_or_default();
     let env_pass = std::env::var("DOP_PASSWORD").unwrap_or_default();
     if !env_user.trim().is_empty() && !env_pass.trim().is_empty() {
-        return (env_user, env_pass);
+        return Some(db::DopCredentials {
+            username: env_user,
+            password: env_pass,
+            source: db::CredentialSource::Env,
+        });
     }
-    let path = match credentials_path(app) {
-        Ok(path) => path,
-        Err(_) => return (String::new(), String::new()),
-    };
+    let path = credentials_path(app).ok()?;
     let text = std::fs::read_to_string(path).unwrap_or_default();
     let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    (
-        value
-            .get("username")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-        value
-            .get("password")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
-    )
+    let username = value
+        .get("username")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let password = value
+        .get("password")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if username.trim().is_empty() || password.trim().is_empty() {
+        return None;
+    }
+    Some(db::DopCredentials {
+        username,
+        password,
+        source: db::CredentialSource::Config,
+    })
+}
+
+/// Resolve DOP credentials, most explicit source first:
+///
+/// 1. `DOP_USERNAME` / `DOP_PASSWORD` (environment or a `.env`)
+/// 2. the app-config `credentials.json`
+/// 3. the `users` collection in Atlas, decrypted with `FERNET_KEY`
+///
+/// The password stays on this side — it is only ever handed to `scraper.py`.
+async fn resolve_credentials(app: &AppHandle) -> Result<db::DopCredentials, String> {
+    if let Some(credentials) = load_local_credentials(app) {
+        return Ok(credentials);
+    }
+    db::fetch_atlas_credentials(app).await
+}
+
+#[tauri::command]
+async fn app_info(app: AppHandle) -> AppInfo {
+    let credentials = resolve_credentials(&app).await;
+    let scraper = scraper_path();
+    AppInfo {
+        desktop: true,
+        scraper: scraper
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "not found".into()),
+        scraper_present: scraper.is_some(),
+        credentials: credentials.is_ok(),
+        python: python_bin(),
+    }
 }
 
 // --------------------------------------------------------------------------- //
@@ -197,22 +236,6 @@ fn parse_results(stdout: &str) -> Option<Vec<Value>> {
 // --------------------------------------------------------------------------- //
 
 #[tauri::command]
-fn app_info(app: AppHandle) -> AppInfo {
-    let (user, password) = load_credentials(&app);
-    let scraper = scraper_path();
-    AppInfo {
-        desktop: true,
-        scraper: scraper
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "not found".into()),
-        scraper_present: scraper.is_some(),
-        credentials: !user.trim().is_empty() && !password.trim().is_empty(),
-        python: python_bin(),
-    }
-}
-
-#[tauri::command]
 fn set_credentials(app: AppHandle, username: String, password: String) -> Result<(), String> {
     let username = username.trim().to_string();
     if username.is_empty() || password.is_empty() {
@@ -234,12 +257,19 @@ fn set_credentials(app: AppHandle, username: String, password: String) -> Result
 /// frontend as a `scraper-progress` event and returns the parsed result array.
 #[tauri::command]
 async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
-    let (user, password) = load_credentials(&app);
-    if user.trim().is_empty() || password.trim().is_empty() {
-        return GenResult::err(
-            "No DOP credentials configured. Set them in Manage → DOP Credentials.",
-        );
-    }
+    // Credentials: env/`.env` first, then the config file, then the `users`
+    // collection in Atlas (Fernet-decrypted). The password never leaves Rust.
+    let credentials = match resolve_credentials(&app).await {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return GenResult::err(format!(
+                "No DOP credentials available: {error}. Set them in Manage → DOP Credentials, \
+                 or add FERNET_KEY to src-tauri/.env so they can be read from Atlas."
+            ))
+        }
+    };
+    let user = credentials.username;
+    let password = credentials.password;
     let Some(script) = scraper_path() else {
         return GenResult::err("scraper.py not found (set AUTODOP_SCRAPER to its path).");
     };
@@ -414,6 +444,29 @@ async fn save_lists(app: AppHandle, lists: Vec<db::InputList>) -> Result<Vec<db:
     db::save_lists(&app, lists).await
 }
 
+/// Which DOP credentials the app would use, and where they come from.
+///
+/// Never returns the password — only the portal id and the source.
+#[tauri::command]
+async fn dop_credentials_status(app: AppHandle) -> db::DopCredentialStatus {
+    match resolve_credentials(&app).await {
+        Ok(credentials) => db::DopCredentialStatus {
+            username: credentials.username,
+            source: credentials.source,
+            has_password: !credentials.password.trim().is_empty(),
+            atlas_available: true,
+            detail: None,
+        },
+        Err(error) => db::DopCredentialStatus {
+            username: String::new(),
+            source: db::CredentialSource::Atlas,
+            has_password: false,
+            atlas_available: false,
+            detail: Some(error),
+        },
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -421,6 +474,7 @@ pub fn run() {
             app_info,
             set_credentials,
             generate_lists,
+            dop_credentials_status,
             db_status,
             load_accounts,
             load_lists,

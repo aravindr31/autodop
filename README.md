@@ -193,6 +193,21 @@ credential stored long ago must keep working.
 - **Reality check** — this clicks the real *pay* flow on the real DOP portal.
   Try a one-account list first.
 
+## Troubleshooting
+
+**`tauri build` fails at `bundle_dmg.sh`.**
+
+First check `df -h /` — a full disk is the commonest cause, and the error
+(`hdiutil: create failed - No space left on device`) is easy to mistake for a
+script problem.
+
+If there is space, look inside `src-tauri/target/release/bundle/macos/`. A
+failed run leaves a ~31 MB `rw.*.dmg` scratch image in there, and Tauri packages
+that folder as the DMG's **source**, so the next attempt copies the junk into
+its own image, fails again, and leaves a bigger one — the folder grows on every
+failure. `npm run build` now clears them first (`npm run clean:dmg`); the
+`AutoDOP.app` built alongside is unaffected either way and stays usable.
+
 ## Checks
 
 ```bash

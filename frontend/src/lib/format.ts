@@ -33,3 +33,27 @@ export function matchesQuery(account: { Name: string; Number: string; CNumber: s
     account.Ref_Number.toLowerCase().includes(q)
   );
 }
+
+/** 1-based bijective base-26: 1 -> A, 26 -> Z, 27 -> AA, 28 -> AB … */
+function toLetter(n: number): string {
+  let s = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+/**
+ * Next auto-generated list label, respecting names already in use so lists
+ * come out alphabetical (A, B, C … Z, AA, AB …). Skips any exact case-insensitive
+ * collision; falls through to multi-letter after a full A–Z run.
+ */
+export function nextListLabel(existing: string[]): string {
+  const used = new Set(existing.map((n) => n.trim().toUpperCase()));
+  for (let n = 1; ; n++) {
+    const label = toLetter(n);
+    if (!used.has(label)) return label;
+  }
+}

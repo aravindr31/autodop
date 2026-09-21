@@ -10,7 +10,7 @@
 import { create } from 'zustand';
 import type { AccountList, PersistedState } from './types';
 import { accountById } from './accounts';
-import { newId } from './format';
+import { newId, nextListLabel } from './format';
 
 export interface ListSummary {
   count: number;
@@ -41,7 +41,7 @@ export interface AppState extends PersistedState {
 const STORAGE_KEY = 'autodop-state-v1';
 const PERSIST_VERSION = 1;
 
-const DEFAULT_LISTS: AccountList[] = [{ id: 'main', name: 'Main List', accountIds: [] }];
+const DEFAULT_LISTS: AccountList[] = [{ id: 'main', name: 'A', accountIds: [] }];
 
 function makeList(raw: unknown): AccountList | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -68,6 +68,11 @@ function loadPersisted(): { lists: AccountList[]; activeListId: string; submitEn
     if (parsed.version !== PERSIST_VERSION || !Array.isArray(parsed.lists)) return null;
     const lists = parsed.lists.map(makeList).filter((l): l is AccountList => l !== null);
     if (lists.length === 0) return null;
+    // Migrate the legacy default name to the current "A" convention.
+    if (!lists.some((l) => l.name === 'A')) {
+      const legacy = lists.find((l) => l.name === 'Main List');
+      if (legacy) legacy.name = 'A';
+    }
     const activeId =
       typeof parsed.activeListId === 'string' && lists.some((l) => l.id === parsed.activeListId)
         ? parsed.activeListId
@@ -122,7 +127,7 @@ export const useStore = create<AppState>()((set, get) => ({
     const id = newId();
     const list: AccountList = {
       id,
-      name: trimmed || `List ${get().lists.length + 1}`,
+      name: trimmed || nextListLabel(get().lists.map((l) => l.name)),
       accountIds: [],
     };
     set({ lists: [...get().lists, list], activeListId: id });

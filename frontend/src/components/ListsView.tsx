@@ -138,7 +138,9 @@ export default function ListsView(): React.ReactElement {
   const [endpointInput, setEndpointInput] = useState(endpoint);
 
   // Lists that have at least one account (spec §3.3: "lists that are not empty").
-  const populated = lists.filter((l) => l.accountIds.length > 0);
+  const populated = lists
+    .filter((l) => l.accountIds.length > 0)
+    .sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
   const emptyCount = lists.length - populated.length;
 
   const saveEndpoint = () => {

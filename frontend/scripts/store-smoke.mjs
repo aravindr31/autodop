@@ -41,7 +41,7 @@ export async function runSmoke() {
   console.log('--- STAGE 1: fresh state, mutate ---');
   const s0 = live();
   check('fresh: one default list', s0.lists.length === 1, `lists=${s0.lists.length}`);
-  check('fresh: default named "Main List"', s0.lists[0].name === 'Main List');
+  check('fresh: default named "A"', s0.lists[0].name === 'A');
   check('fresh: active = main', s0.activeListId === s0.lists[0].id);
   check('fresh: totals 0/0', s0.totalsOf(s0.activeListId).count === 0 && s0.totalsOf(s0.activeListId).amount === 0);
 
@@ -49,7 +49,7 @@ export async function runSmoke() {
   const { id: vipId, name: vipName } = s.createList('VIP');
   check('create: VIP added', live().lists.length === 2, `n=${live().lists.length}`);
   check('create: active switched to VIP', live().activeListId === vipId);
-  check('create: auto-name when blank', live().createList('  ').name.startsWith('List'));
+  check('create: auto-name next letter "B"', live().createList('  ').name === 'B');
 
   const { ACCOUNTS } = await import(`${BUNDLE}/accounts.mjs`);
   const acc = ACCOUNTS[0];
@@ -92,7 +92,7 @@ export async function runSmoke() {
   check('persist: blob written', Boolean(blobTxt));
   check('persist: version=1', blob.version === 1);
   check('persist: lists include VIP Club', blob.lists.some((l) => l.name === 'VIP Club'));
-  check('persist: lists include Main List', blob.lists.some((l) => l.name === 'Main List'));
+  check('persist: lists include "A"', blob.lists.some((l) => l.name === 'A'));
   check('persist: has 3 lists', blob.lists.length === 3, `n=${blob.lists.length}`);
   check('persist: active id saved', typeof blob.activeListId === 'string' && blob.activeListId.length > 0);
   check('persist: endpoint saved', blob.submitEndpoint === 'https://api.example/v1/batch');

@@ -48,8 +48,10 @@ left as-is (BSON `_id: { $oid }` included).
 
 - **Accounts** tab — search by name/number/CNumber/ref, then **Add** to the
   active list. Already-added accounts show which list they're in.
-- **Lists** (left panel) — create / select (active) / rename / delete lists.
-  The active list and all state persist across sessions via `localStorage`.
+- **Lists** (left panel) — **Create List** adds the next alphabetical list
+  (default list is **A**, then B, C … Z, AA, …); lists render alphabetically.
+  Select (active) / rename / delete. All state persists across sessions via
+  `localStorage`.
 - **Lists** tab — summary cards (name, item count, total ₹ denomination) that
   expand to show items with **Remove**, plus **Copy numbers**, **Clear list**,
   and **Submit to backend**.

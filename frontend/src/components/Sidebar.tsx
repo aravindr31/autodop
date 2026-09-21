@@ -111,12 +111,13 @@ export function SidebarPanel({ onNavigate }: { onNavigate: () => void }): React.
   const lists = useStore((s) => s.lists);
   const activeId = useStore((s) => s.activeListId);
   const store = useStore.getState();
-  const [newName, setNewName] = useState('');
+
+  // New lists get the next free letter (A, B, C …) and lists render alphabetically.
+  const sorted = [...lists].sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
 
   const create = () => {
-    const created = store.createList(newName);
+    const created = store.createList();
     store.setActiveList(created.id);
-    setNewName('');
     onNavigate();
   };
 
@@ -126,11 +127,11 @@ export function SidebarPanel({ onNavigate }: { onNavigate: () => void }): React.
         Lists {lists.length > 0 ? `· ${lists.length}` : ''}
       </div>
 
-      {lists.length === 0 ? (
+      {sorted.length === 0 ? (
         <p className="px-2.5 py-2 text-xs text-slate-400">No lists yet. Create one below.</p>
       ) : (
         <ul className="flex flex-col gap-0.5">
-          {lists.map((list) => (
+          {sorted.map((list) => (
             <ListRow
               key={list.id}
               list={list}
@@ -141,26 +142,14 @@ export function SidebarPanel({ onNavigate }: { onNavigate: () => void }): React.
         </ul>
       )}
 
-      <form className="mt-2 flex items-center gap-1.5" onSubmit={create}>
-        <div className="relative min-w-0 flex-1">
-          <input
-            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-2 text-sm placeholder:text-slate-400 focus:border-indigo-400 focus:outline-2 focus:outline-offset-0 focus:outline-indigo-200"
-            placeholder="New list…"
-            value={newName}
-            onChange={(e) => setNewName(e.currentTarget.value)}
-          />
-          <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400">
-            <Plus className="h-4 w-4" />
-          </span>
-        </div>
-        <button
-          type="submit"
-          disabled={!newName.trim()}
-          className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-sm font-medium text-white disabled:opacity-40"
-        >
-          Add
-        </button>
-      </form>
+      <button
+        type="button"
+        onClick={create}
+        className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400"
+      >
+        <Plus className="h-4 w-4" />
+        Create List
+      </button>
     </div>
   );
 }

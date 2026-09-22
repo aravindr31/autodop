@@ -219,6 +219,49 @@ function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[
 }
 
 /**
+ * Empty every list in one go, keeping the lists themselves — the accounts stay
+ * in the Accounts tab. Not undoable, so it is a two-step action.
+ */
+function ClearAllButton({ lists }: { lists: AccountList[] }): React.ReactElement | null {
+  const store = useStore.getState();
+  const [confirming, setConfirming] = useState(false);
+
+  const total = lists.reduce((sum, list) => sum + list.accountIds.length, 0);
+  if (total === 0) return null;
+
+  const clear = () => {
+    const removed = store.clearAllLists();
+    setConfirming(false);
+    notify(`Cleared all lists — ${removed} account(s) removed`, 'info');
+  };
+
+  if (confirming) {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-slate-600">
+          Remove all {total} account(s) from every list?
+        </span>
+        <Button variant="danger" size="sm" onClick={clear}>
+          <Trash className="h-4 w-4" />Yes, clear all
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button variant="danger" size="sm" onClick={() => setConfirming(true)}>
+        <Trash className="h-4 w-4" />Clear all lists
+      </Button>
+      <span className="text-[11px] text-slate-500">
+        Empties every list — the lists and the accounts stay.
+      </span>
+    </div>
+  );
+}
+
+/**
  * "Generate All Lists" — the Streamlit UI's headline action, restored: every
  * non-empty list goes out in a single scraper.py invocation, which logs in once
  * and then works through the lists in order.
@@ -392,6 +435,7 @@ export default function ListsView(): React.ReactElement {
 
       {/* The Streamlit UI's single "Generate All Lists" action (main.py:543). */}
       {populated.length > 0 ? <GenerateAllButton lists={populated} /> : null}
+      {populated.length > 0 ? <ClearAllButton lists={populated} /> : null}
 
       {populated.length === 0 ? (
         <EmptyState

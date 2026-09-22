@@ -50,6 +50,8 @@ export interface AppState {
   /** Set one account's rebate (RD installment no.) within a list. */
   setRebate: (listId: string, accountId: string, rebate: number) => void;
   clearList: (listId: string) => void;
+  /** Empty every list at once, keeping the lists. Returns accounts removed. */
+  clearAllLists: () => number;
   setSubmitEndpoint: (endpoint: string) => void;
 
   // ---- account actions ----
@@ -253,9 +255,22 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   clearList: (listId) => {
+    // Drop the rebates too: leaving them behind would resurrect an old value if
+    // the same account is added to the list again.
     set({
-      lists: get().lists.map((l) => (l.id === listId ? { ...l, accountIds: [] } : l)),
+      lists: get().lists.map((l) =>
+        l.id === listId ? { ...l, accountIds: [], rebates: {} } : l
+      ),
     });
+  },
+
+  clearAllLists: () => {
+    const lists = get().lists;
+    const removed = lists.reduce((total, list) => total + list.accountIds.length, 0);
+    set({
+      lists: lists.map((list) => ({ ...list, accountIds: [], rebates: {} })),
+    });
+    return removed;
   },
 
   setRebate: (listId, accountId, rebate) => {

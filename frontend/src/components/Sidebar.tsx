@@ -5,7 +5,8 @@
  */
 import { useState } from 'react';
 import { useStore } from '../lib/store';
-import { Plus, Pencil, X, Check } from 'lucide-react';
+import { Plus, Pencil, X, Check, Trash } from 'lucide-react';
+import { notify } from '../lib/toast';
 
 function ListRow({
   list,
@@ -41,10 +42,13 @@ function ListRow({
     <li className={active
       ? 'group relative rounded-lg bg-indigo-50 text-indigo-800 shadow-sm'
       : 'group relative rounded-lg bg-white text-slate-700 hover:bg-slate-50'}>
+      {/* pr-16 reserves the strip the rename/delete chip floats over (2 × 24px
+          buttons + gap, inset 6px ≈ 58px), so the count badge is not hidden
+          underneath the delete cross. */}
       <button
         type="button"
         onClick={select}
-        className="flex w-full items-center gap-2.5 px-2.5 py-2 text-left text-sm font-medium"
+        className="flex w-full items-center gap-2.5 py-2 pl-2.5 pr-16 text-left text-sm font-medium"
       >
         {!editing && (
           <>
@@ -111,14 +115,22 @@ export function SidebarPanel({ onNavigate }: { onNavigate: () => void }): React.
   const lists = useStore((s) => s.lists);
   const activeId = useStore((s) => s.activeListId);
   const store = useStore.getState();
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   // New lists get the next free letter (A, B, C …) and lists render alphabetically.
   const sorted = [...lists].sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
+  const totalAccounts = lists.reduce((sum, list) => sum + list.accountIds.length, 0);
 
   const create = () => {
     const created = store.createList();
     store.setActiveList(created.id);
     onNavigate();
+  };
+
+  const clearAll = () => {
+    const removed = store.clearAllLists();
+    setConfirmingClear(false);
+    notify(`Cleared all lists — ${removed} account(s) removed`, 'info');
   };
 
   return (
@@ -150,6 +162,33 @@ export function SidebarPanel({ onNavigate }: { onNavigate: () => void }): React.
         <Plus className="h-4 w-4" />
         Create List
       </button>
+
+      {totalAccounts > 0 ? (
+        confirmingClear ? (
+          <div className="flex flex-col gap-1.5">
+            <p className="px-1 text-[11px] leading-relaxed text-slate-500">
+              Remove all {totalAccounts} account(s) from every list?
+            </p>
+            <div className="flex gap-1.5">
+              <button type="button" onClick={clearAll}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-rose-600 px-2 py-1.5 text-xs font-medium text-white hover:bg-rose-500">
+                <Check className="h-3.5 w-3.5" />
+                Clear all
+              </button>
+              <button type="button" onClick={() => setConfirmingClear(false)}
+                className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50">
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setConfirmingClear(true)}
+            className="mt-1.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-600 hover:border-rose-300 hover:bg-rose-50">
+            <Trash className="h-4 w-4" />
+            Clear all lists
+          </button>
+        )
+      ) : null}
     </div>
   );
 }

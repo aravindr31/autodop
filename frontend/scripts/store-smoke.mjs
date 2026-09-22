@@ -83,6 +83,28 @@ export async function runSmoke() {
   s.clearList(vipId);
   check('clear: VIP empty', live().totalsOf(vipId).count === 0);
 
+  // Clearing must drop the rebates too, or re-adding the same account would
+  // resurrect the old value.
+  s.setActiveList(vipId);
+  s.addToActive(acc._id);
+  s.setRebate(vipId, acc._id, 3);
+  check('clear: rebate stored before clearing', live().lists.find((l) => l.id === vipId).rebates?.[acc._id] === 3);
+  s.clearList(vipId);
+  check('clear: rebates dropped with the accounts', live().lists.find((l) => l.id === vipId).rebates?.[acc._id] === undefined);
+
+  // ---- clear every list at once ----
+  const mainList = live().lists.find((l) => l.name === 'A');
+  s.setActiveList(mainList.id);
+  s.addToActive(acc._id);
+  s.addToActive(acc2._id);
+  const beforeClearAll = live().lists.reduce((n, l) => n + l.accountIds.length, 0);
+  const removedCount = s.clearAllLists();
+  check('clearAll: reports how many were removed', removedCount === beforeClearAll, `${removedCount} vs ${beforeClearAll}`);
+  check('clearAll: every list is empty', live().lists.every((l) => l.accountIds.length === 0));
+  check('clearAll: the lists themselves stay', live().lists.length === 3, `n=${live().lists.length}`);
+  check('clearAll: accounts are untouched', live().accounts.length > 0, `n=${live().accounts.length}`);
+  check('clearAll: safe when already empty', s.clearAllLists() === 0);
+
   // ---- account mutations ----
   const added = s.addAccount({ Number: '9999000011', Name: 'NEW Sample', Denomination: '50', CNumber: 'CN-1', Ref_Number: 'REF-1' });
   check('addAccount: id assigned', typeof added._id === 'string' && added._id.length > 0);

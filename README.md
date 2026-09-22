@@ -59,27 +59,65 @@ real value rather than "unset".
 
 ## Credentials
 
-**Credentials already exist in your database** — the app reads them from there,
-so you normally do not need to type anything. Resolution order:
+### The DOP portal password expires every 180 days
+
+Change it on the India Post portal first, then save the new one here:
+**Manage (gear) → DOP portal password** — enter the DOP id, the new password
+twice, and press **Save DOP password**. (Typing it twice exists because a typo
+would otherwise break every run until the next rotation.)
+
+It is stored **encrypted** — a Fernet token under the same `FERNET_KEY` that
+protects the Atlas copy — at:
+
+- macOS: `~/Library/Application Support/in.aravind.autodop/credentials.json`
+- Windows: `%APPDATA%\in.aravind.autodop\credentials.json`
+
+…mode 600, never in the browser. The app also tries to write that same ciphertext
+back to `users.UserInfo.DOP_password`. While the Atlas role is read-only that
+fails harmlessly and the UI says so; the local file outranks Atlas, so either way
+the new password takes effect immediately.
+
+`FERNET_KEY` is what makes that file readable, so keep it: change it and the saved
+password can no longer be decrypted, and the app falls back to the Atlas copy
+(save the password again after restoring the key). Note the local file outranking
+Atlas also means rotating the password *outside* the app — editing the document in
+the Atlas UI, say — has no effect on this Mac until you either save it here again
+or delete `credentials.json`.
+
+### Resolution order
 
 1. `DOP_USERNAME` / `DOP_PASSWORD` in the environment or a `.env`
-2. **Manage (gear) → DOP Credentials** — written by the Rust backend to the app
-   config folder, never to the browser:
-   - macOS: `~/Library/Application Support/in.aravind.autodop/credentials.json`
-   - Windows: `%APPDATA%\in.aravind.autodop\credentials.json`
-3. **The `users` collection in Atlas** (`_id: 5fbf919c87da8228f87bd62f`):
+2. the app-config `credentials.json` — what **Save DOP password** writes
+3. **the `users` collection in Atlas** (`_id: 5fbf919c87da8228f87bd62f`):
    `UserInfo.DOP_ID` is the portal username and `UserInfo.DOP_password` is a
    Fernet token that gets decrypted in Rust.
 
-Manage → DOP Credentials shows which source is in use and the portal id. **The
-password is never sent to the webview** — it goes from Rust straight into
-`scraper.py`'s argv.
+**Credentials already exist in your database**, so a fresh install needs nothing
+typed. Manage → DOP portal password shows which source is in use. **The password
+is never sent to the webview** — it goes from Rust straight into `scraper.py`'s
+argv.
+
+## Scraper script
+
+Every build carries its own copy of `scraper.py`, so there is normally nothing to
+configure. Resolution order:
+
+1. a path chosen in **Manage → Scraper script** (`settings.json`, same folder)
+2. `AUTODOP_SCRAPER`
+3. the copy inside the app bundle
+4. `<repo>/scraper.py`, which only exists when running from source
+5. `scraper.py` in the working directory
+
+**Built-in copy** in that section clears the override and goes back to the bundled
+one. Bundling settles the *path* question only: `selenium` and Chrome are still
+needed, because the script is Python rather than a compiled binary — shipping
+that too means a PyInstaller sidecar, which is not wired up.
 
 ## Overrides
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AUTODOP_SCRAPER` | `<repo>/scraper.py` | path to the Selenium script |
+| `AUTODOP_SCRAPER` | the bundled copy | path to the Selenium script |
 | `AUTODOP_PYTHON` | `python3` (mac) / `python` (win) | interpreter to launch it with |
 | `DOP_USERNAME` / `DOP_PASSWORD` | config file | portal credentials |
 

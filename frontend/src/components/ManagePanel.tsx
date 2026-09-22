@@ -4,7 +4,7 @@
  * out. Account mutations hit the live store and persist; the credential gate
  * is client-side (see `src/lib/auth.ts`).
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../lib/store';
 import { matchesQuery, denominationLabel } from '../lib/format';
 import { notify } from '../lib/toast';
@@ -16,8 +16,11 @@ import {
   loadLists,
   saveLists,
   dopCredentialsStatus,
+  scraperLocation,
+  setScraperPath,
+  clearScraperPath,
 } from '../lib/bridge';
-import type { DbStatus, DopCredentialStatus } from '../lib/bridge';
+import type { DbStatus, DopCredentialStatus, SavedCredentials, ScraperLocation } from '../lib/bridge';
 import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database } from 'lucide-react';
 import { Button, Pill } from './ui';
 
@@ -172,8 +175,10 @@ function DesktopSection(): React.ReactElement {
   const { ready, info } = useDesktop();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState(false);
+  const [outcome, setOutcome] = useState<SavedCredentials | null>(null);
 
   useEffect(() => {
     if (info) setConfigured(info.credentials);
@@ -184,40 +189,72 @@ function DesktopSection(): React.ReactElement {
       notify('Username and password are both required', 'error');
       return;
     }
+    // A mistyped password would silently break every run for 180 days.
+    if (password !== confirm) {
+      notify('The two passwords do not match', 'error');
+      return;
+    }
     setBusy(true);
     const res = await saveCredentials(username.trim(), password);
     setBusy(false);
-    if (res.ok) {
-      notify('DOP credentials saved to desktop/.env', 'success');
-      setConfigured(true);
-      setUsername('');
-      setPassword('');
-    } else {
-      notify(res.error ?? 'Could not save credentials', 'error');
+    if (!res.ok) {
+      notify(res.error ?? 'Could not save the DOP password', 'error');
+      return;
     }
+    setConfigured(true);
+    setOutcome(res.result ?? null);
+    setUsername('');
+    setPassword('');
+    setConfirm('');
+    notify('DOP password saved, encrypted', 'success');
   };
 
   return (
-    <Section title="DOP Credentials">
+    <Section title="DOP portal password">
       {ready ? (
         <>
+          <p className="mb-2 text-xs leading-relaxed text-slate-500">
+            The password <code className="font-mono">scraper.py</code> signs into the DOP portal
+            with. India Post expires it every 180 days — change it on the portal first, then save it
+            here.
+          </p>
           <p className="mb-2 flex items-center gap-1.5 text-xs text-slate-500">
             <Terminal className="h-3.5 w-3.5 shrink-0" />
             <span>
-              {configured ? 'Configured.' : 'Not configured yet.'} Stored by the Rust backend in this
-              app&rsquo;s config folder — never in the browser.
+              {configured ? 'A password is saved.' : 'No DOP password saved yet.'} Held by the Rust
+              backend, never in the browser.
             </span>
           </p>
           <div className="flex flex-col gap-2">
-            <input aria-label="DOP username" value={username} onChange={(e) => setUsername(e.currentTarget.value)} className={FIELD} placeholder="DOP username" />
-            <input type="password" aria-label="DOP password" value={password} onChange={(e) => setPassword(e.currentTarget.value)} className={FIELD} placeholder="DOP password" />
+            <input aria-label="DOP username" value={username} onChange={(e) => setUsername(e.currentTarget.value)} className={FIELD} placeholder="DOP username (DOP.MI…)" />
+            <input type="password" aria-label="New DOP password" value={password} onChange={(e) => setPassword(e.currentTarget.value)} className={FIELD} placeholder="New DOP password" />
+            <input type="password" aria-label="Confirm new DOP password" value={confirm} onChange={(e) => setConfirm(e.currentTarget.value)} className={FIELD} placeholder="Repeat the new password" />
             <Button variant="secondary" className="!w-full" disabled={busy} onClick={() => void save()}>
-              <KeyRound className="h-4 w-4" />Save credentials
+              <KeyRound className="h-4 w-4" />Save DOP password
             </Button>
           </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            Stored encrypted with <code className="font-mono">FERNET_KEY</code> — the same cipher and
+            key as the copy in Atlas — in this app&rsquo;s config folder, readable only by your user.
+            It takes priority over the Atlas copy, so a change here applies immediately even while
+            the Atlas role is read-only.
+          </p>
+          {outcome && !outcome.atlas_updated ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-amber-700">
+              The Atlas copy still holds the previous password
+              {outcome.atlas_note ? <> — {outcome.atlas_note}</> : null}. That is fine while this
+              Mac is the only machine running the app; widen the Atlas role to read-write if you
+              want the database copy updated too.
+            </p>
+          ) : null}
+          {outcome?.atlas_updated ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-emerald-700">
+              Updated in Atlas as well, so every machine picks it up.
+            </p>
+          ) : null}
           {info && !info.scraper_present ? (
             <p className="mt-2 text-[11px] text-rose-600">
-              scraper.py was not found — set <code className="font-mono">AUTODOP_SCRAPER</code> to its path.
+              scraper.py was not found — pick one under <strong>Scraper script</strong> below.
             </p>
           ) : null}
           {info ? (
@@ -240,6 +277,111 @@ function DesktopSection(): React.ReactElement {
           Available in the desktop app only — a browser cannot run Selenium. Launch it with{' '}
           <code className="rounded bg-slate-100 px-1 font-mono">npm run dev</code>.
         </p>
+      )}
+    </Section>
+  );
+}
+
+/** How the resolved `scraper.py` is described in the UI. */
+const SCRAPER_SOURCE_LABEL: Record<string, string> = {
+  chosen: 'chosen here',
+  env: 'AUTODOP_SCRAPER',
+  bundled: 'built into the app',
+  repo: 'repo checkout (dev)',
+  cwd: 'working directory',
+};
+
+/**
+ * Where `scraper.py` comes from.
+ *
+ * Every build carries its own copy, so this section only matters when you want
+ * to point the app at a different script — a modified one, say.
+ */
+function ScraperSection(): React.ReactElement {
+  const { ready } = useDesktop();
+  const [location, setLocation] = useState<ScraperLocation | null>(null);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLocation(await scraperLocation());
+  }, []);
+
+  useEffect(() => {
+    if (ready) void refresh();
+  }, [ready, refresh]);
+
+  const apply = async () => {
+    if (!draft.trim()) {
+      notify('Enter the full path to a scraper.py', 'error');
+      return;
+    }
+    setBusy(true);
+    const res = await setScraperPath(draft.trim());
+    setBusy(false);
+    if (!res.ok) {
+      notify(res.error ?? 'Could not use that path', 'error');
+      return;
+    }
+    setLocation(res.location ?? null);
+    setDraft('');
+    notify('scraper.py path updated', 'success');
+  };
+
+  const useBundled = async () => {
+    setBusy(true);
+    const res = await clearScraperPath();
+    setBusy(false);
+    if (!res.ok) {
+      notify(res.error ?? 'Could not reset the path', 'error');
+      return;
+    }
+    setLocation(res.location ?? null);
+    notify('Back to the copy that ships with the app', 'success');
+  };
+
+  return (
+    <Section title="Scraper script">
+      {ready ? (
+        <>
+          <p className="mb-2 text-xs leading-relaxed text-slate-500">
+            The Python script that drives the DOP portal. Every build carries its own copy, so
+            there is normally nothing to set here.
+          </p>
+          {location ? (
+            <div className="mb-2 flex flex-col gap-1 rounded-lg bg-slate-50 px-2.5 py-2">
+              <Pill tone={location.present ? 'positive' : 'neutral'}>
+                {location.present
+                  ? (SCRAPER_SOURCE_LABEL[location.source] ?? location.source)
+                  : 'not found'}
+              </Pill>
+              <code className="break-all font-mono text-[11px] text-slate-700">{location.path}</code>
+            </div>
+          ) : null}
+          <div className="flex flex-col gap-2">
+            <input
+              aria-label="Path to scraper.py"
+              value={draft}
+              onChange={(e) => setDraft(e.currentTarget.value)}
+              className={FIELD}
+              placeholder="/path/to/scraper.py"
+            />
+            <div className="flex gap-2">
+              <Button variant="secondary" className="!flex-1" disabled={busy} onClick={() => void apply()}>
+                Use this path
+              </Button>
+              <Button variant="ghost" className="!flex-1" disabled={busy} onClick={() => void useBundled()}>
+                Built-in copy
+              </Button>
+            </div>
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            This only picks the script. <code className="font-mono">selenium</code> and Chrome still
+            have to be installed — see Python above.
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-slate-500">Available in the desktop app only.</p>
       )}
     </Section>
   );
@@ -453,6 +595,7 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
           <ChangePasswordSection />
           <DatabaseSection />
           <DesktopSection />
+          <ScraperSection />
         </div>
 
         <div className="mt-4 border-t border-slate-200 pt-3">

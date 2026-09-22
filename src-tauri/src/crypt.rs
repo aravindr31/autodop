@@ -22,13 +22,14 @@
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecryptMut, KeyIvInit};
+use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use base64::Engine as _;
 use hmac::digest::KeyInit as _; // brings `new_from_slice`; aliased to avoid the cipher `KeyInit`
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Version byte every Fernet token starts with.
@@ -49,8 +50,8 @@ pub fn decrypt(key: &str, token: &str) -> Result<String, String> {
     String::from_utf8(plaintext).map_err(|_| "decrypted value is not valid UTF-8".to_string())
 }
 
-/// Decrypt a Fernet token into raw bytes.
-pub fn decrypt_bytes(key: &str, token: &str) -> Result<Vec<u8>, String> {
+/// Split a Fernet key into the raw 32 bytes it must be.
+fn parse_key(key: &str) -> Result<Vec<u8>, String> {
     let key_bytes = b64()
         .decode(key.trim())
         .map_err(|error| format!("Fernet key is not valid base64url: {error}"))?;
@@ -60,6 +61,54 @@ pub fn decrypt_bytes(key: &str, token: &str) -> Result<Vec<u8>, String> {
             key_bytes.len()
         ));
     }
+    Ok(key_bytes)
+}
+
+/// Encrypt `plaintext` into a Fernet token, stamped with the current time.
+pub fn encrypt(key: &str, plaintext: &str) -> Result<String, String> {
+    let mut iv = [0u8; BLOCK_LEN];
+    getrandom::getrandom(&mut iv).map_err(|error| format!("no system randomness: {error}"))?;
+    encrypt_at(key, plaintext, crate::now_secs(), &iv)
+}
+
+/// Encrypt with an explicit timestamp and IV, so tests can pin the output.
+pub fn encrypt_at(key: &str, plaintext: &str, timestamp: u64, iv: &[u8]) -> Result<String, String> {
+    let key_bytes = parse_key(key)?;
+    if iv.len() != BLOCK_LEN {
+        return Err(format!("IV must be {BLOCK_LEN} bytes, got {}", iv.len()));
+    }
+    let (signing_key, encryption_key) = key_bytes.split_at(KEY_LEN / 2);
+
+    // version || timestamp || IV, then the AES-CBC ciphertext.
+    let mut body = Vec::with_capacity(HEADER_LEN + plaintext.len() + BLOCK_LEN);
+    body.push(VERSION);
+    body.extend_from_slice(&timestamp.to_be_bytes());
+    body.extend_from_slice(iv);
+
+    // `encrypt_padded_mut` writes in place, so start from an over-sized buffer.
+    let plain = plaintext.as_bytes();
+    let mut buffer = vec![0u8; plain.len() + BLOCK_LEN];
+    buffer[..plain.len()].copy_from_slice(plain);
+    let ciphertext = Aes128CbcEnc::new(
+        GenericArray::from_slice(encryption_key),
+        GenericArray::from_slice(iv),
+    )
+    .encrypt_padded_mut::<Pkcs7>(&mut buffer, plain.len())
+    .map_err(|_| "AES-CBC encryption failed".to_string())?;
+    body.extend_from_slice(ciphertext);
+
+    // The tag covers everything written so far, so tampering is detectable.
+    let mut mac = HmacSha256::new_from_slice(signing_key).map_err(|error| error.to_string())?;
+    mac.update(&body);
+    let tag = mac.finalize().into_bytes();
+    body.extend_from_slice(&tag[..]);
+
+    Ok(b64().encode(&body))
+}
+
+/// Decrypt a Fernet token into raw bytes.
+pub fn decrypt_bytes(key: &str, token: &str) -> Result<Vec<u8>, String> {
+    let key_bytes = parse_key(key)?;
 
     let raw = b64()
         .decode(token.trim())
@@ -159,5 +208,49 @@ mod tests {
         assert_eq!(TEST_KEY.len(), 44, "fernet keys are 44 base64 chars");
         assert!(TEST_KEY.ends_with('='), "fernet keys are padded");
         assert_eq!(b64().decode(TEST_KEY).unwrap().len(), KEY_LEN);
+    }
+
+    #[test]
+    fn round_trips_its_own_tokens() {
+        for plaintext in ["short", "", "a-14-char-pass", "åéîøü — unicode"] {
+            let token = encrypt(TEST_KEY, plaintext).unwrap();
+            assert_eq!(
+                decrypt(TEST_KEY, &token).unwrap(),
+                plaintext,
+                "failed round trip for {plaintext:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn builds_the_byte_layout_python_expects() {
+        const STAMP: u64 = 1_758_468_000;
+        let token = encrypt_at(TEST_KEY, "abc", STAMP, &[7u8; BLOCK_LEN]).unwrap();
+        assert_eq!(decrypt(TEST_KEY, &token).unwrap(), "abc");
+
+        // Same layout as the Python vectors: 0x80, big-endian timestamp, IV.
+        let raw = b64().decode(&token).unwrap();
+        assert_eq!(raw[0], VERSION);
+        assert_eq!(&raw[1..9], &STAMP.to_be_bytes());
+        assert_eq!(&raw[9..HEADER_LEN], &[7u8; BLOCK_LEN]);
+        // 3 bytes of plaintext pad to one block, plus the 32-byte tag.
+        assert_eq!(raw.len(), HEADER_LEN + BLOCK_LEN + HMAC_LEN);
+    }
+
+    #[test]
+    fn stamps_a_fresh_iv_on_every_call() {
+        let first = encrypt(TEST_KEY, "same input").unwrap();
+        let second = encrypt(TEST_KEY, "same input").unwrap();
+        assert_ne!(first, second, "the IV must not repeat");
+        assert_eq!(decrypt(TEST_KEY, &first).unwrap(), "same input");
+        assert_eq!(decrypt(TEST_KEY, &second).unwrap(), "same input");
+    }
+
+    #[test]
+    fn refuses_to_encrypt_with_a_bad_key_or_iv() {
+        assert!(encrypt("not-a-key", "x").is_err(), "bad key");
+        let wrong_len = b64().encode([0u8; KEY_LEN - 1]);
+        assert!(encrypt(&wrong_len, "x").is_err(), "short key");
+        assert!(encrypt_at(TEST_KEY, "x", 0, &[0u8; 8]).is_err(), "short iv");
     }
 }

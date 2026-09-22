@@ -33,8 +33,52 @@ export interface AppInfo {
   desktop: boolean;
   scraper: string;
   scraper_present: boolean;
+  /** `chosen` | `env` | `bundled` | `repo` | `cwd`. */
+  scraper_source: string;
   credentials: boolean;
   python: string;
+}
+
+/** Where `scraper.py` was found, and where it came from. */
+export interface ScraperLocation {
+  path: string;
+  source: string;
+  present: boolean;
+}
+
+export async function scraperLocation(): Promise<ScraperLocation | null> {
+  if (!isDesktop()) return null;
+  try {
+    return await invoke<ScraperLocation>('scraper_location');
+  } catch {
+    return null;
+  }
+}
+
+/** Point the app at a different `scraper.py`. */
+export async function setScraperPath(
+  path: string,
+): Promise<{ ok: boolean; error?: string; location?: ScraperLocation }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return { ok: true, location: await invoke<ScraperLocation>('set_scraper_path', { path }) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Drop the override and fall back to the bundled copy. */
+export async function clearScraperPath(): Promise<{
+  ok: boolean;
+  error?: string;
+  location?: ScraperLocation;
+}> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return { ok: true, location: await invoke<ScraperLocation>('clear_scraper_path') };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /** Atlas connection state reported by the Rust backend. */
@@ -112,14 +156,24 @@ export async function generateLists(lists: GenList[]): Promise<GenResult> {
   }
 }
 
+/** Where a saved DOP password ended up. */
+export interface SavedCredentials {
+  /** Written to the app-config file, encrypted. */
+  stored_encrypted: boolean;
+  /** The `users` document in Atlas was updated too. */
+  atlas_updated: boolean;
+  /** Why the Atlas copy was left alone (read-only role, offline, ...). */
+  atlas_note?: string | null;
+}
+
 export async function saveCredentials(
   username: string,
   password: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; result?: SavedCredentials }> {
   if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
   try {
-    await invoke('set_credentials', { username, password });
-    return { ok: true };
+    const result = await invoke<SavedCredentials>('set_credentials', { username, password });
+    return { ok: true, result };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

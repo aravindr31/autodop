@@ -553,6 +553,14 @@ pub async fn fetch_atlas_credentials(app: &AppHandle) -> Result<DopCredentials, 
     fetch_atlas_credentials_with(&cfg, &key).await
 }
 
+/// The filter that finds the single login record the old app used.
+fn user_filter() -> Document {
+    match ObjectId::parse_str(USER_ID) {
+        Ok(oid) => doc! { "_id": oid },
+        Err(_) => doc! { "_id": USER_ID },
+    }
+}
+
 /// The actual query + decryption — takes a config and key so it can be
 /// exercised without an app handle.
 pub async fn fetch_atlas_credentials_with(
@@ -561,10 +569,7 @@ pub async fn fetch_atlas_credentials_with(
 ) -> Result<DopCredentials, String> {
     let client = connect(cfg).await?;
 
-    let filter = match ObjectId::parse_str(USER_ID) {
-        Ok(oid) => doc! { "_id": oid },
-        Err(_) => doc! { "_id": USER_ID },
-    };
+    let filter = user_filter();
     let user = client
         .database(&cfg.db)
         .collection::<Document>(USERS_COLLECTION)
@@ -598,9 +603,43 @@ pub async fn fetch_atlas_credentials_with(
     })
 }
 
+/// Replace `UserInfo.DOP_password` with an already-encrypted token.
+///
+/// This is the app's only write path to `users`, and it needs a read-write Atlas
+/// role — the role currently configured is read-only, so callers must treat a
+/// failure here as an expected outcome, not a bug.
+pub async fn update_atlas_dop_password(app: &AppHandle, token: &str) -> Result<(), String> {
+    let cfg = load_db_config(Some(app)).ok_or(NO_URI)?;
+    let client = connect(&cfg).await?;
+
+    let result = client
+        .database(&cfg.db)
+        .collection::<Document>(USERS_COLLECTION)
+        .update_one(
+            user_filter(),
+            doc! { "$set": { "UserInfo.DOP_password": token } },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+    if result.matched_count == 0 {
+        return Err(format!(
+            "no user {USER_ID} in {}.{USERS_COLLECTION}",
+            cfg.db
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_the_expected_user_filter() {
+        // Must be a real ObjectId; a string here silently matches nothing.
+        assert!(matches!(user_filter().get("_id"), Some(Bson::ObjectId(_))));
+    }
 
     fn sample_doc() -> Document {
         doc! {

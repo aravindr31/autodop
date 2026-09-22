@@ -72,6 +72,8 @@ pub struct AppInfo {
     pub desktop: bool,
     pub scraper: String,
     pub scraper_present: bool,
+    /// `chosen` | `env` | `bundled` | `repo` | `cwd`.
+    pub scraper_source: String,
     pub credentials: bool,
     pub python: String,
 }
@@ -80,22 +82,131 @@ pub struct AppInfo {
 // paths + credentials                                                         //
 // --------------------------------------------------------------------------- //
 
-/// `scraper.py` location: env override, then the repo root (dev), then CWD.
-fn scraper_path() -> Option<PathBuf> {
+/// Where `scraper.py` was found, and where it came from.
+#[derive(Debug, Serialize, Clone)]
+pub struct ScraperLocation {
+    pub path: String,
+    /// `chosen` | `env` | `bundled` | `repo` | `cwd` — shown in the UI.
+    pub source: String,
+    pub present: bool,
+}
+
+/// The bundled script inside a resource directory.
+///
+/// Tauri rewrites a `../` resource path into `_up_` while copying, so the file
+/// can end up at either spelling — accept both rather than guess.
+fn bundled_scraper_in(resource_dir: &Path) -> Option<PathBuf> {
+    ["scraper.py", "_up_/scraper.py"]
+        .iter()
+        .map(|relative| resource_dir.join(relative))
+        .find(|path| path.is_file())
+}
+
+/// Resolve `scraper.py`, most specific first:
+///
+/// 1. a path chosen in the UI (app-config `settings.json`)
+/// 2. `AUTODOP_SCRAPER` (environment or `.env`)
+/// 3. the copy bundled inside the app — so a shipped build needs no setup
+/// 4. the repo root, which only exists when running from source
+/// 5. the working directory
+fn locate_scraper(app: Option<&AppHandle>) -> ScraperLocation {
+    let mut candidates: Vec<(PathBuf, &str)> = Vec::new();
+
+    if let Some(app) = app {
+        if let Some(chosen) = saved_scraper_override(app) {
+            candidates.push((chosen, "chosen"));
+        }
+    }
     if let Ok(value) = std::env::var("AUTODOP_SCRAPER") {
-        let candidate = PathBuf::from(value.trim());
-        if candidate.is_file() {
-            return Some(candidate);
+        if !value.trim().is_empty() {
+            candidates.push((PathBuf::from(value.trim()), "env"));
+        }
+    }
+    if let Some(app) = app {
+        if let Ok(dir) = app.path().resource_dir() {
+            let bundled = bundled_scraper_in(&dir).unwrap_or_else(|| dir.join("scraper.py"));
+            candidates.push((bundled, "bundled"));
         }
     }
     if let Some(root) = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent() {
-        let candidate = root.join("scraper.py");
-        if candidate.is_file() {
-            return Some(candidate);
+        candidates.push((root.join("scraper.py"), "repo"));
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push((cwd.join("scraper.py"), "cwd"));
+    }
+
+    for (path, source) in &candidates {
+        if path.is_file() {
+            return ScraperLocation {
+                path: path.display().to_string(),
+                source: (*source).to_string(),
+                present: true,
+            };
         }
     }
-    let candidate = std::env::current_dir().ok()?.join("scraper.py");
-    candidate.is_file().then_some(candidate)
+
+    // Nothing usable — report what was tried first so the UI can say so.
+    let (path, source) = candidates
+        .first()
+        .map(|(path, source)| (path.clone(), *source))
+        .unwrap_or_else(|| (PathBuf::from("scraper.py"), "cwd"));
+    ScraperLocation {
+        path: path.display().to_string(),
+        source: source.to_string(),
+        present: false,
+    }
+}
+
+/// The app's own small settings file, next to `credentials.json`.
+fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("no app-config directory: {error}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    Ok(dir.join("settings.json"))
+}
+
+fn read_settings(app: &AppHandle) -> Value {
+    settings_path(app)
+        .ok()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
+/// A `scraper.py` path chosen in the UI, if that file still exists.
+fn saved_scraper_override(app: &AppHandle) -> Option<PathBuf> {
+    let value = read_settings(app)
+        .get("scraper_path")?
+        .as_str()?
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(value);
+    path.is_file().then_some(path)
+}
+
+/// Persist the chosen `scraper.py`, or drop the override to fall back.
+fn write_scraper_override(app: &AppHandle, path: Option<&str>) -> Result<(), String> {
+    let file = settings_path(app)?;
+    let mut settings = read_settings(app);
+    if !settings.is_object() {
+        settings = json!({});
+    }
+    match path {
+        Some(value) => settings["scraper_path"] = json!(value),
+        None => {
+            if let Some(map) = settings.as_object_mut() {
+                map.remove("scraper_path");
+            }
+        }
+    }
+    let body = serde_json::to_string_pretty(&settings).map_err(|error| error.to_string())?;
+    std::fs::write(&file, body).map_err(|error| format!("cannot write {}: {error}", file.display()))
 }
 
 /// Python interpreter: env override, else `python` on Windows / `python3` elsewhere.
@@ -212,14 +323,26 @@ fn load_local_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let password = value
+    let stored = value
         .get("password")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    if username.trim().is_empty() || password.trim().is_empty() {
+    if username.trim().is_empty() || stored.trim().is_empty() {
         return None;
     }
+    // The file holds a Fernet token; a plaintext value from an older build still
+    // works. A token that will not decrypt (wrong or missing FERNET_KEY) is
+    // skipped rather than passed on as if it were the password — falling back to
+    // Atlas beats sending a wall of base64 to the portal.
+    let password = if stored.starts_with("gAAAA") {
+        match db::fernet_key(Some(app)).and_then(|key| crypt::decrypt(&key, &stored).ok()) {
+            Some(plain) => plain,
+            None => return None,
+        }
+    } else {
+        stored
+    };
     Some(db::DopCredentials {
         username,
         password,
@@ -244,14 +367,12 @@ async fn resolve_credentials(app: &AppHandle) -> Result<db::DopCredentials, Stri
 #[tauri::command]
 async fn app_info(app: AppHandle) -> AppInfo {
     let credentials = resolve_credentials(&app).await;
-    let scraper = scraper_path();
+    let scraper = locate_scraper(Some(&app));
     AppInfo {
         desktop: true,
-        scraper: scraper
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "not found".into()),
-        scraper_present: scraper.is_some(),
+        scraper: scraper.path,
+        scraper_present: scraper.present,
+        scraper_source: scraper.source,
         credentials: credentials.is_ok(),
         python: python_bin(),
     }
@@ -314,22 +435,94 @@ fn parse_results(stdout: &str) -> Option<Vec<Value>> {
 // commands                                                                    //
 // --------------------------------------------------------------------------- //
 
+/// Where a saved DOP password ended up, so the UI can say so plainly.
+#[derive(Debug, Serialize, Default)]
+pub struct SavedCredentials {
+    /// The password was written to the app-config file, encrypted.
+    pub stored_encrypted: bool,
+    /// The `users` document in Atlas was updated too.
+    pub atlas_updated: bool,
+    /// Why the Atlas copy was left alone (read-only role, offline, ...).
+    pub atlas_note: Option<String>,
+}
+
+/// Store the DOP portal password, encrypted, and try to update the Atlas copy.
+///
+/// DOP passwords expire every 180 days: change it on the portal, then save it
+/// here. The app-config file always wins over Atlas, so a save takes effect
+/// immediately even while the Atlas role is read-only.
 #[tauri::command]
-fn set_credentials(app: AppHandle, username: String, password: String) -> Result<(), String> {
+async fn set_credentials(
+    app: AppHandle,
+    username: String,
+    password: String,
+) -> Result<SavedCredentials, String> {
     let username = username.trim().to_string();
     if username.is_empty() || password.is_empty() {
         return Err("Username and password are both required.".into());
     }
+
+    // Encrypt before anything touches the disk — never store it in the clear.
+    let key = db::fernet_key(Some(&app)).ok_or(
+        "FERNET_KEY is not configured, so the password cannot be encrypted. Add it to src-tauri/.env.",
+    )?;
+    let token = crypt::encrypt(&key, &password)?;
+
     let path = credentials_path(&app)?;
-    let body = serde_json::to_string_pretty(&json!({ "username": username, "password": password }))
-        .map_err(|e| e.to_string())?;
-    std::fs::write(&path, body).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let body = serde_json::to_string_pretty(&json!({
+        "username": username,
+        "password": token,
+        "encrypted": true,
+    }))
+    .map_err(|error| error.to_string())?;
+    std::fs::write(&path, body)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
-    Ok(())
+
+    let mut saved = SavedCredentials {
+        stored_encrypted: true,
+        ..SavedCredentials::default()
+    };
+
+    // Best effort, never fatal: the stored Atlas copy is the same ciphertext in
+    // the same format, but the configured role is read-only today.
+    if db::load_db_config(Some(&app)).is_none() {
+        saved.atlas_note = Some("no MONGO_URI configured".to_string());
+    } else {
+        match db::update_atlas_dop_password(&app, &token).await {
+            Ok(()) => saved.atlas_updated = true,
+            Err(error) => saved.atlas_note = Some(error),
+        }
+    }
+
+    Ok(saved)
+}
+
+#[tauri::command]
+fn scraper_location(app: AppHandle) -> ScraperLocation {
+    locate_scraper(Some(&app))
+}
+
+/// Point the app at a different `scraper.py`.
+#[tauri::command]
+fn set_scraper_path(app: AppHandle, path: String) -> Result<ScraperLocation, String> {
+    let candidate = PathBuf::from(path.trim());
+    if !candidate.is_file() {
+        return Err(format!("{} is not a file", candidate.display()));
+    }
+    write_scraper_override(&app, Some(&candidate.display().to_string()))?;
+    Ok(locate_scraper(Some(&app)))
+}
+
+/// Drop the override and go back to the bundled copy.
+#[tauri::command]
+fn clear_scraper_path(app: AppHandle) -> Result<ScraperLocation, String> {
+    write_scraper_override(&app, None)?;
+    Ok(locate_scraper(Some(&app)))
 }
 
 /// Run `scraper.py` for the supplied lists. Streams each stdout line to the
@@ -349,9 +542,14 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
     };
     let user = credentials.username;
     let password = credentials.password;
-    let Some(script) = scraper_path() else {
-        return GenResult::err("scraper.py not found (set AUTODOP_SCRAPER to its path).");
-    };
+    let location = locate_scraper(Some(&app));
+    if !location.present {
+        return GenResult::err(format!(
+            "scraper.py not found — looked at {}. Choose its location in Manage → Scraper script.",
+            location.path
+        ));
+    }
+    let script = PathBuf::from(&location.path);
 
     let payload = build_payload(lists);
     if payload.is_empty() {
@@ -595,7 +793,10 @@ pub fn run() {
             db_status,
             load_accounts,
             load_lists,
-            save_lists
+            save_lists,
+            scraper_location,
+            set_scraper_path,
+            clear_scraper_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running AutoDOP");
@@ -611,6 +812,32 @@ mod tests {
             numbers: numbers.iter().map(|s| s.to_string()).collect(),
             rebate: rebate.to_vec(),
         }
+    }
+
+    #[test]
+    fn finds_the_bundled_script_in_either_layout() {
+        let dir = std::env::temp_dir().join(format!("autodop-bundle-{}", std::process::id()));
+        let flat = dir.join("scraper.py");
+        let nested = dir.join("_up_/scraper.py");
+        std::fs::create_dir_all(dir.join("_up_")).unwrap();
+
+        // A `../scraper.py` resource is copied to `_up_/` — what the .app ships.
+        std::fs::write(&nested, "# placeholder").unwrap();
+        assert_eq!(bundled_scraper_in(&dir).unwrap(), nested);
+
+        // A flat resource wins when both are present.
+        std::fs::write(&flat, "# placeholder").unwrap();
+        assert_eq!(bundled_scraper_in(&dir).unwrap(), flat);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reports_nothing_when_no_bundled_script_exists() {
+        let dir = std::env::temp_dir().join(format!("autodop-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(bundled_scraper_in(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

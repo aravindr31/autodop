@@ -125,6 +125,7 @@ dependencies = [
  "base64 0.23.1",
  "cbc",
  "futures-util",
+ "getrandom 0.2.17",
  "hmac",
  "mongodb",
  "serde",

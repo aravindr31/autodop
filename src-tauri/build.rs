@@ -1,4 +1,5 @@
 fn main() {
+    use std::path::Path;
     // Stamp every build with the commit it came from, so a built app can always
     // be told apart from an older one — "which version am I running?" should
     // never require guesswork.
@@ -23,11 +24,23 @@ fn main() {
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Say so when the code is not a committed revision — an uncommitted build
-    // must not look like a released one.
+    // Say so when the app's own code is not a committed revision — an
+    // uncommitted build must not look like a released one. Scoped to the paths
+    // that can actually affect the binary, so unrelated edits elsewhere in the
+    // repo do not flag every build.
     let dirty = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            "src-tauri",
+            "frontend",
+            "scripts",
+            "package.json",
+            "scraper.py",
+        ])
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or(Path::new(".")))
         .output()
         .ok()
         .filter(|out| out.status.success())

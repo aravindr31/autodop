@@ -1075,10 +1075,11 @@ mod tests {
             return; // no git checkout — nothing to assert about the commit
         }
 
-        // Expect "<short sha> · YYYY-MM-DDTHH:MMZ".
+        // Expect "<short sha>[+dirty] · YYYY-MM-DDTHH:MMZ".
         let (sha, when) = stamp
             .split_once(" · ")
             .unwrap_or_else(|| panic!("no build time in {stamp:?} — was AUTODOP_BUILD_EPOCH set?"));
+        let sha = sha.strip_suffix("+dirty").unwrap_or(sha);
         assert!((7..=12).contains(&sha.len()), "commit looks wrong: {sha}");
         assert_eq!(when.len(), 17, "timestamp looks wrong: {when}");
         assert!(when.starts_with("20"), "timestamp year: {when}");

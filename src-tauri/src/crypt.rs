@@ -64,6 +64,14 @@ fn parse_key(key: &str) -> Result<Vec<u8>, String> {
     Ok(key_bytes)
 }
 
+/// A fresh Fernet key: the same 44-character base64url shape, padding included,
+/// that Python's `Fernet.generate_key()` produces.
+pub fn generate_key() -> Result<String, String> {
+    let mut bytes = [0u8; KEY_LEN];
+    getrandom::getrandom(&mut bytes).map_err(|error| format!("no system randomness: {error}"))?;
+    Ok(b64().encode(&bytes))
+}
+
 /// Encrypt `plaintext` into a Fernet token, stamped with the current time.
 pub fn encrypt(key: &str, plaintext: &str) -> Result<String, String> {
     let mut iv = [0u8; BLOCK_LEN];
@@ -252,5 +260,21 @@ mod tests {
         let wrong_len = b64().encode([0u8; KEY_LEN - 1]);
         assert!(encrypt(&wrong_len, "x").is_err(), "short key");
         assert!(encrypt_at(TEST_KEY, "x", 0, &[0u8; 8]).is_err(), "short iv");
+    }
+
+    #[test]
+    fn generates_keys_python_would_accept() {
+        let key = generate_key().unwrap();
+        // Same shape as Fernet.generate_key(): 44 base64url chars, padded.
+        assert_eq!(key.len(), 44, "got {key}");
+        assert!(key.ends_with('='));
+        assert_eq!(parse_key(&key).unwrap().len(), KEY_LEN);
+
+        // And a generated key immediately works for a round trip.
+        let token = encrypt(&key, "first run").unwrap();
+        assert_eq!(decrypt(&key, &token).unwrap(), "first run");
+
+        // Two calls must not produce the same key.
+        assert_ne!(key, generate_key().unwrap());
     }
 }

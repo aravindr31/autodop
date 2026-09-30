@@ -70,10 +70,16 @@ impl GenResult {
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
     pub desktop: bool,
+    /// App version, from `tauri.conf.json` — also the name of the installer.
+    pub version: String,
+    /// `<short sha> <commit date>` for the build you are running.
+    pub build: String,
     pub scraper: String,
     pub scraper_present: bool,
-    /// `chosen` | `env` | `bundled` | `repo` | `cwd`.
+    /// `chosen` | `env` | `sidecar` | `bundled` | `repo` | `cwd`.
     pub scraper_source: String,
+    /// `sidecar` (self-contained) | `script` (needs Python).
+    pub scraper_kind: String,
     pub credentials: bool,
     pub python: String,
 }
@@ -82,13 +88,46 @@ pub struct AppInfo {
 // paths + credentials                                                         //
 // --------------------------------------------------------------------------- //
 
-/// Where `scraper.py` was found, and where it came from.
+/// Where the runner was found, and where it came from.
 #[derive(Debug, Serialize, Clone)]
 pub struct ScraperLocation {
     pub path: String,
-    /// `chosen` | `env` | `bundled` | `repo` | `cwd` — shown in the UI.
+    /// `chosen` | `env` | `sidecar` | `bundled` | `repo` | `cwd`.
     pub source: String,
+    /// `sidecar` (a self-contained executable) | `script` (needs Python).
+    pub kind: String,
     pub present: bool,
+}
+
+/// A `.py` needs an interpreter; anything else is treated as a frozen helper.
+fn kind_of(path: &Path) -> &'static str {
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
+    {
+        "script"
+    } else {
+        "sidecar"
+    }
+}
+
+/// Name of the packaged helper for this platform, e.g. `scraper-macos-arm64`.
+/// Produced by `npm run build:sidecar` — see the README.
+fn sidecar_name() -> String {
+    let os = std::env::consts::OS;
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        other => other,
+    };
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    format!("scraper-{os}-{arch}{suffix}")
+}
+
+/// The frozen helper inside a resource directory, if one was bundled.
+fn bundled_sidecar_in(resource_dir: &Path) -> Option<PathBuf> {
+    let candidate = resource_dir.join("binaries").join(sidecar_name());
+    candidate.is_file().then_some(candidate)
 }
 
 /// The bundled script inside a resource directory.
@@ -102,6 +141,26 @@ fn bundled_scraper_in(resource_dir: &Path) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+/// Make sure a bundled executable can be launched.
+///
+/// Bundlers do not always carry the executable bit across, and a helper that is
+/// present but not runnable fails in a thoroughly confusing way.
+fn ensure_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mode = metadata.permissions().mode();
+            if mode & 0o111 == 0 {
+                let _ =
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o755));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 /// Resolve `scraper.py`, most specific first:
 ///
 /// 1. a path chosen in the UI (app-config `settings.json`)
@@ -110,49 +169,63 @@ fn bundled_scraper_in(resource_dir: &Path) -> Option<PathBuf> {
 /// 4. the repo root, which only exists when running from source
 /// 5. the working directory
 fn locate_scraper(app: Option<&AppHandle>) -> ScraperLocation {
-    let mut candidates: Vec<(PathBuf, &str)> = Vec::new();
+    // (path, source, kind)
+    let mut candidates: Vec<(PathBuf, &str, &str)> = Vec::new();
+    let mut add = |path: PathBuf, source: &'static str| {
+        let kind = kind_of(&path);
+        candidates.push((path, source, kind));
+    };
 
     if let Some(app) = app {
         if let Some(chosen) = saved_scraper_override(app) {
-            candidates.push((chosen, "chosen"));
+            add(chosen, "chosen");
         }
     }
     if let Ok(value) = std::env::var("AUTODOP_SCRAPER") {
         if !value.trim().is_empty() {
-            candidates.push((PathBuf::from(value.trim()), "env"));
+            add(PathBuf::from(value.trim()), "env");
         }
     }
     if let Some(app) = app {
         if let Ok(dir) = app.path().resource_dir() {
-            let bundled = bundled_scraper_in(&dir).unwrap_or_else(|| dir.join("scraper.py"));
-            candidates.push((bundled, "bundled"));
+            // The frozen helper comes first: it needs no Python at all, which is
+            // the only configuration a fresh install can be expected to satisfy.
+            if let Some(sidecar) = bundled_sidecar_in(&dir) {
+                add(sidecar, "sidecar");
+            }
+            if let Some(script) = bundled_scraper_in(&dir) {
+                add(script, "bundled");
+            }
         }
     }
     if let Some(root) = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent() {
-        candidates.push((root.join("scraper.py"), "repo"));
+        add(root.join("scraper.py"), "repo");
     }
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push((cwd.join("scraper.py"), "cwd"));
+        add(cwd.join("scraper.py"), "cwd");
     }
 
-    for (path, source) in &candidates {
+    for (path, source, kind) in &candidates {
         if path.is_file() {
             return ScraperLocation {
                 path: path.display().to_string(),
                 source: (*source).to_string(),
+                kind: (*kind).to_string(),
                 present: true,
             };
         }
     }
 
     // Nothing usable — report what was tried first so the UI can say so.
-    let (path, source) = candidates
-        .first()
-        .map(|(path, source)| (path.clone(), *source))
-        .unwrap_or_else(|| (PathBuf::from("scraper.py"), "cwd"));
+    let (path, source, kind) =
+        candidates
+            .first()
+            .cloned()
+            .unwrap_or((PathBuf::from("scraper.py"), "cwd", "script"));
     ScraperLocation {
         path: path.display().to_string(),
         source: source.to_string(),
+        kind: kind.to_string(),
         present: false,
     }
 }
@@ -304,6 +377,59 @@ fn credentials_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("credentials.json"))
 }
 
+/// This app's own key file: generated on first use, beside `credentials.json`.
+fn key_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("no app-config directory: {error}"))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+    Ok(dir.join("key"))
+}
+
+fn read_key_file(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let trimmed = text.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// The key for anything this app encrypts itself — a configured `FERNET_KEY`
+/// if there is one, otherwise a key generated on first use.
+///
+/// Generating one is what lets a fresh install store a DOP password without
+/// anyone hand-editing a `.env`. It is deliberately *not* the key used for
+/// reading the Atlas copy: a brand-new key cannot decrypt that, and generating
+/// one eagerly would turn an honest "FERNET_KEY is not configured" into a
+/// misleading HMAC failure.
+fn app_key(app: &AppHandle) -> Result<String, String> {
+    if let Some(key) = db::fernet_key(Some(app)) {
+        return Ok(key);
+    }
+    let path = key_path(app)?;
+    if let Some(existing) = read_key_file(&path) {
+        return Ok(existing);
+    }
+
+    let key = crypt::generate_key()?;
+    std::fs::write(&path, &key)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(key)
+}
+
+/// Read that key without creating one — for decrypting a file that exists.
+fn existing_app_key(app: &AppHandle) -> Option<String> {
+    if let Some(key) = db::fernet_key(Some(app)) {
+        return Some(key);
+    }
+    read_key_file(&key_path(app).ok()?)
+}
+
 /// Credentials from the environment/`.env` or the app-config file, if present.
 fn load_local_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
     let env_user = std::env::var("DOP_USERNAME").unwrap_or_default();
@@ -336,7 +462,7 @@ fn load_local_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
     // skipped rather than passed on as if it were the password — falling back to
     // Atlas beats sending a wall of base64 to the portal.
     let password = if stored.starts_with("gAAAA") {
-        match db::fernet_key(Some(app)).and_then(|key| crypt::decrypt(&key, &stored).ok()) {
+        match existing_app_key(app).and_then(|key| crypt::decrypt(&key, &stored).ok()) {
             Some(plain) => plain,
             None => return None,
         }
@@ -370,9 +496,12 @@ async fn app_info(app: AppHandle) -> AppInfo {
     let scraper = locate_scraper(Some(&app));
     AppInfo {
         desktop: true,
+        version: app.package_info().version.to_string(),
+        build: build_stamp(),
         scraper: scraper.path,
         scraper_present: scraper.present,
         scraper_source: scraper.source,
+        scraper_kind: scraper.kind,
         credentials: credentials.is_ok(),
         python: python_bin(),
     }
@@ -463,9 +592,9 @@ async fn set_credentials(
     }
 
     // Encrypt before anything touches the disk — never store it in the clear.
-    let key = db::fernet_key(Some(&app)).ok_or(
-        "FERNET_KEY is not configured, so the password cannot be encrypted. Add it to src-tauri/.env.",
-    )?;
+    // `app_key` generates a key on first use, so this works on a fresh install
+    // with no .env at all.
+    let key = app_key(&app)?;
     let token = crypt::encrypt(&key, &password)?;
 
     let path = credentials_path(&app)?;
@@ -525,6 +654,29 @@ fn clear_scraper_path(app: AppHandle) -> Result<ScraperLocation, String> {
     Ok(locate_scraper(Some(&app)))
 }
 
+/// `"<short sha> · <when this build was produced>"`.
+///
+/// The commit alone is not enough: rebuild the same commit and the stamp would
+/// be identical, which is exactly the confusion this exists to prevent. The
+/// minutes-resolution build time makes every artifact tell itself apart.
+pub fn build_stamp() -> String {
+    let commit = option_env!("AUTODOP_BUILD_STAMP").unwrap_or("unknown");
+    match option_env!("AUTODOP_BUILD_EPOCH").and_then(|value| value.parse::<u64>().ok()) {
+        Some(epoch) if epoch > 0 => format!("{commit} · {}", iso_minute(epoch)),
+        _ => commit.to_string(),
+    }
+}
+
+/// `2026-10-01T00:18Z` — `rfc3339_utc` without the seconds.
+fn iso_minute(epoch: u64) -> String {
+    let full = rfc3339_utc(epoch);
+    if full.len() >= 17 {
+        format!("{}Z", &full[..16])
+    } else {
+        full
+    }
+}
+
 /// Run `scraper.py` for the supplied lists. Streams each stdout line to the
 /// frontend as a `scraper-progress` event and returns the parsed result array.
 #[tauri::command]
@@ -535,8 +687,7 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
         Ok(credentials) => credentials,
         Err(error) => {
             return GenResult::err(format!(
-                "No DOP credentials available: {error}. Set them in Manage → DOP Credentials, \
-                 or add FERNET_KEY to src-tauri/.env so they can be read from Atlas."
+                "No DOP credentials available: {error}. Set them in Manage → DOP portal password."
             ))
         }
     };
@@ -545,11 +696,10 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
     let location = locate_scraper(Some(&app));
     if !location.present {
         return GenResult::err(format!(
-            "scraper.py not found — looked at {}. Choose its location in Manage → Scraper script.",
+            "No runner found — looked at {}. Choose one in Manage → Scraper script.",
             location.path
         ));
     }
-    let script = PathBuf::from(&location.path);
 
     let payload = build_payload(lists);
     if payload.is_empty() {
@@ -568,7 +718,7 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
     };
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        run_scraper(&app, &script, &user, &password, &lists_json)
+        run_scraper(&app, &location, &user, &password, &lists_json)
     })
     .await;
 
@@ -580,37 +730,64 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
 
 fn run_scraper(
     app: &AppHandle,
-    script: &Path,
+    location: &ScraperLocation,
     user: &str,
     password: &str,
     lists_json: &str,
 ) -> GenResult {
+    let target = PathBuf::from(&location.path);
+    // A frozen helper takes the arguments directly; a script needs an interpreter
+    // in front of it.
+    let is_sidecar = location.kind == "sidecar";
+
     // Mirror the run to a file: the progress area is cleared as soon as the
     // window moves on, and a failure has to stay inspectable afterwards.
     let run_log = RunLog::open(app);
     if let Some(log) = &run_log {
         log.write("autodop - scraper run");
         log.write(&format!("started:  {}", rfc3339_utc(now_secs())));
-        log.write(&format!("python:   {}", python_bin()));
-        log.write(&format!("script:   {}", script.display()));
+        if is_sidecar {
+            log.write(&format!("runner:   bundled helper ({})", target.display()));
+        } else {
+            log.write(&format!("python:   {}", python_bin()));
+            log.write(&format!("script:   {}", target.display()));
+        }
         log.write(&format!("user:     {user}"));
         log.write("password: <redacted>");
         log.write(&format!("payload:  {lists_json}"));
         log.write("------------------------------------------------------------");
     }
 
-    let mut child = match Command::new(python_bin())
-        .arg(script)
+    if is_sidecar {
+        ensure_executable(&target);
+    }
+    let mut command = if is_sidecar {
+        Command::new(&target)
+    } else {
+        let mut python = Command::new(python_bin());
+        python.arg(&target);
+        python
+    };
+    command
         .arg(user)
         .arg(password)
         .arg(lists_json)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .spawn()
-    {
+        .stdin(Stdio::null());
+
+    let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(e) => return GenResult::err(format!("could not start python: {e}")),
+        Err(error) => {
+            return GenResult::err(format!(
+                "could not start {}: {error}",
+                if is_sidecar {
+                    "the bundled runner"
+                } else {
+                    "python"
+                }
+            ))
+        }
     };
 
     // Drain both pipes on their own threads: streaming stdout to the UI as
@@ -838,6 +1015,75 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(bundled_scraper_in(&dir), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn names_the_sidecar_for_this_platform() {
+        let name = sidecar_name();
+        assert!(name.starts_with("scraper-"), "got {name}");
+        assert!(name.contains(std::env::consts::OS), "got {name}");
+        if cfg!(windows) {
+            assert!(name.ends_with(".exe"), "got {name}");
+        } else {
+            assert!(!name.ends_with(".exe"), "got {name}");
+        }
+        // Must match the name scripts/build-sidecar.mjs writes.
+        if cfg!(target_arch = "aarch64") {
+            assert!(name.contains("arm64"), "got {name}");
+        }
+        if cfg!(target_arch = "x86_64") {
+            assert!(name.contains("x64"), "got {name}");
+        }
+    }
+
+    #[test]
+    fn tells_a_script_from_a_frozen_helper() {
+        assert_eq!(kind_of(Path::new("/x/scraper.py")), "script");
+        assert_eq!(kind_of(Path::new("/x/SCRAPER.PY")), "script");
+        assert_eq!(kind_of(Path::new("/x/scraper-macos-arm64")), "sidecar");
+        assert_eq!(kind_of(Path::new("/x/scraper-windows-x64.exe")), "sidecar");
+    }
+
+    #[test]
+    fn finds_a_bundled_sidecar_by_platform_name() {
+        let dir = std::env::temp_dir().join(format!("autodop-side-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("binaries")).unwrap();
+        assert_eq!(bundled_sidecar_in(&dir), None, "nothing bundled yet");
+
+        let expected = dir.join("binaries").join(sidecar_name());
+        std::fs::write(&expected, b"#!/bin/sh\n").unwrap();
+        assert_eq!(bundled_sidecar_in(&dir).unwrap(), expected);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shortens_the_build_time_to_minutes() {
+        assert_eq!(iso_minute(1_758_468_000), "2025-09-21T15:20Z");
+        assert_eq!(iso_minute(0), "1970-01-01T00:00Z");
+    }
+
+    #[test]
+    fn stamps_the_build_with_a_commit_and_a_time() {
+        let stamp = build_stamp();
+        assert_eq!(
+            stamp,
+            build_stamp(),
+            "baked in at compile time, so it must not drift"
+        );
+        if stamp == "unknown" {
+            return; // no git checkout — nothing to assert about the commit
+        }
+
+        // Expect "<short sha> · YYYY-MM-DDTHH:MMZ".
+        let (sha, when) = stamp
+            .split_once(" · ")
+            .unwrap_or_else(|| panic!("no build time in {stamp:?} — was AUTODOP_BUILD_EPOCH set?"));
+        assert!((7..=12).contains(&sha.len()), "commit looks wrong: {sha}");
+        assert_eq!(when.len(), 17, "timestamp looks wrong: {when}");
+        assert!(when.starts_with("20"), "timestamp year: {when}");
+        assert_eq!(&when[10..11], "T", "timestamp separator: {when}");
+        assert!(when.ends_with('Z'), "timestamp zone: {when}");
     }
 
     #[test]

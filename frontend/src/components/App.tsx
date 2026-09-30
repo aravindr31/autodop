@@ -17,6 +17,7 @@ import Browser from './Browser';
 import ListsView from './ListsView';
 import AuthScreen from './AuthScreen';
 import ManagePanel from './ManagePanel';
+import { VersionLine } from './VersionLine';
 import { ToastViewItem } from './ui';
 import type { ToastView } from './ui';
 import { Menu, Check, Settings } from 'lucide-react';
@@ -155,6 +156,9 @@ export default function App(): React.ReactElement {
         {/* Desktop sidebar */}
         <aside className="hidden w-full rounded-xl border border-slate-200 bg-white p-3 shadow-sm lg:block">
           <SidebarPanel onNavigate={() => {}} />
+          <div className="mt-3 border-t border-slate-100 pt-2">
+            <VersionLine />
+          </div>
         </aside>
 
         {/* Main tab content */}

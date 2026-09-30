@@ -6,6 +6,10 @@ src-tauri/gen/
 
 # Python env for scraper.py (selenium lives here, not in the repo).
 .venv-scraper/
+# Frozen scraper.py builds — produced by `npm run build:sidecar` on each OS.
+.sidecar-build/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
 
 # Secrets — never commit connection strings or credentials.
 .env

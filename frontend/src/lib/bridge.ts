@@ -31,18 +31,26 @@ export interface GenResult {
 
 export interface AppInfo {
   desktop: boolean;
+  /** App version, from tauri.conf.json — also names the installer. */
+  version: string;
+  /** `<short sha> <commit date>` for the running build. */
+  build: string;
   scraper: string;
   scraper_present: boolean;
-  /** `chosen` | `env` | `bundled` | `repo` | `cwd`. */
+  /** `chosen` | `env` | `sidecar` | `bundled` | `repo` | `cwd`. */
   scraper_source: string;
+  /** `sidecar` (self-contained) | `script` (needs Python). */
+  scraper_kind: string;
   credentials: boolean;
   python: string;
 }
 
-/** Where `scraper.py` was found, and where it came from. */
+/** Where the runner was found, and where it came from. */
 export interface ScraperLocation {
   path: string;
   source: string;
+  /** `sidecar` (self-contained) | `script` (needs Python). */
+  kind: string;
   present: boolean;
 }
 

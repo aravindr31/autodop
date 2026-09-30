@@ -99,19 +99,21 @@ argv.
 
 ## Scraper script
 
-Every build carries its own copy of `scraper.py`, so there is normally nothing to
+Every build carries its own copy of the runner, so there is normally nothing to
 configure. Resolution order:
 
 1. a path chosen in **Manage → Scraper script** (`settings.json`, same folder)
 2. `AUTODOP_SCRAPER`
-3. the copy inside the app bundle
-4. `<repo>/scraper.py`, which only exists when running from source
-5. `scraper.py` in the working directory
+3. `binaries/scraper-<os>-<arch>` — the frozen helper, which needs no Python
+4. `scraper.py` inside the app, which does need a Python with selenium
+5. `<repo>/scraper.py`, which only exists when running from source
+6. `scraper.py` in the working directory
 
-**Built-in copy** in that section clears the override and goes back to the bundled
-one. Bundling settles the *path* question only: `selenium` and Chrome are still
-needed, because the script is Python rather than a compiled binary — shipping
-that too means a PyInstaller sidecar, which is not wired up.
+**Built-in copy** in that section clears the override and goes back to the
+bundled one. A `.py` needs an interpreter; anything else is treated as a frozen
+helper and gets the arguments directly. See
+[Shipping it to someone else](#shipping-it-to-someone-else) for how the helper is
+built.
 
 ## Overrides
 
@@ -289,6 +291,55 @@ credential stored long ago must keep working.
 - **Reality check** — this clicks the real *pay* flow on the real DOP portal.
   Try a one-account list first.
 
+## Shipping it to someone else
+
+Build once per OS — `npm run build` gives a `.dmg` on macOS, `.msi`/`.exe` on
+Windows, `.deb`/`.AppImage` on Linux. PyInstaller cannot cross-compile, so the
+frozen runner has to be produced on each platform you ship:
+
+```bash
+npm run build:sidecar   # freezes scraper.py for THIS os/arch
+npm run build           # bundles that into the installer
+```
+
+`build:sidecar` writes `src-tauri/binaries/scraper-<os>-<arch>[.exe]`, and Tauri
+ships it inside the app. The app prefers it over the bundled `.py` because it
+carries its own Python and selenium, so the target machine needs **no Python, no
+pip, no selenium**. It does still need **Google Chrome** — Selenium drives the
+real browser — and the first run downloads a matching chromedriver, so it needs
+internet once.
+
+Nothing about this is required for your own Mac: with no sidecar present the app
+falls back to the bundled `scraper.py` exactly as before, so a plain
+`git clone && npm run build` still works without PyInstaller.
+
+### First run on a new machine
+
+The app generates its own encryption key (`key`, mode 600) in the app config
+folder the first time it needs to store a DOP password, so nobody has to create a
+`.env`. Enter the DOP id and password once in **Manage → DOP portal password**:
+
+- macOS: `~/Library/Application Support/in.aravind.autodop/`
+- Windows: `%APPDATA%\in.aravind.autodop\`
+- Linux: `~/.config/in.aravind.autodop/`
+
+A configured `FERNET_KEY` still takes precedence — that is the key that reads the
+encrypted copy in Atlas, which a freshly generated one deliberately cannot.
+
+### Not signed — what that costs
+
+These builds are not code-signed or notarized. On macOS Gatekeeper will refuse a
+downloaded `.dmg`; the recipient has to right-click the app → **Open** once (or
+System Settings → Privacy & Security → **Open Anyway**). Unsigned Windows builds
+show a SmartScreen prompt behind *More info → Run anyway*. Linux does not care.
+
+Signing is what removes those prompts — a Developer ID certificate plus
+`notarytool` on macOS, an EV/OV certificate on Windows. Without it, whoever you
+hand the app to needs that one extra step explained to them.
+
+The macOS bundle is **arm64-only**; an Intel Mac needs a build produced on, or
+targeted at, `x86_64`.
+
 ## Troubleshooting
 
 **Generate fails with *"Scraper produced no parseable result"* and Chrome never
@@ -301,16 +352,37 @@ interpreter the app picked; see [Python & Chrome](#python--chrome).
 
 **`tauri build` fails at `bundle_dmg.sh`.**
 
-First check `df -h /` — a full disk is the commonest cause, and the error
-(`hdiutil: create failed - No space left on device`) is easy to mistake for a
-script problem.
+`npm run build` no longer takes that path. Tauri's DMG step (create-dmg) writes
+its scratch `rw.*.dmg` image into the very folder it is about to copy, so the
+image contains a copy of itself; a failed run leaves tens of MB behind and each
+retry nests deeper, ending in a misleading `hdiutil: create failed - No space
+left on device` from the resize step. It also leaves a mounted volume behind.
 
-If there is space, look inside `src-tauri/target/release/bundle/macos/`. A
-failed run leaves a ~31 MB `rw.*.dmg` scratch image in there, and Tauri packages
-that folder as the DMG's **source**, so the next attempt copies the junk into
-its own image, fails again, and leaves a bigger one — the folder grows on every
-failure. `npm run build` now clears them first (`npm run clean:dmg`); the
-`AutoDOP.app` built alongside is unaffected either way and stays usable.
+`scripts/build.mjs` avoids it: it builds the `.app` with Tauri, stages a pristine
+copy in the system temp dir, makes the image with a single `hdiutil create`, then
+mounts the result read-only and checks the app, the `/Applications` symlink, the
+bundled `.py` and the frozen runner are all really inside. A `.dmg` is only
+reported once those pass.
+
+If you need the old behaviour, `npm run build:tauri` is still there — check
+`df -h /` first, and clear leftovers with `npm run clean:dmg`.
+
+## Versions
+
+The version lives in four files that must agree, so bump them together:
+
+```bash
+npm run version:bump -- 0.3.0
+```
+
+That updates `tauri.conf.json` (which names the installer,
+`AutoDOP_<version>_<arch>.dmg`), `Cargo.toml`, and both `package.json`s.
+
+Every build also carries the commit it came from, stamped by `build.rs` as
+`<short sha> <commit date>`. The running build is shown in the app: at the bottom
+of the left-hand list panel, on the sign-in screen, and as **This build** in
+Manage. So "did the install replace the last one?" is answered by looking, not
+guessing.
 
 ## Checks
 

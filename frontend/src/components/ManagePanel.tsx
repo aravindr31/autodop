@@ -259,13 +259,22 @@ function DesktopSection(): React.ReactElement {
           ) : null}
           {info ? (
             <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-              Python: <code className="font-mono">{info.python}</code>
-              {info.python.includes('/') ? null : (
+              {info.scraper_kind === 'sidecar' ? (
                 <>
-                  {' '}
-                  — the bare <code className="font-mono">python3</code> from PATH. Install selenium into
-                  it, or point <code className="font-mono">AUTODOP_PYTHON</code> at an interpreter that
-                  has it.
+                  Runner: <code className="font-mono">built into the app</code> — it carries its own
+                  Python and selenium, so no interpreter is needed here.
+                </>
+              ) : (
+                <>
+                  Python: <code className="font-mono">{info.python}</code>
+                  {info.python.includes('/') ? null : (
+                    <>
+                      {' '}
+                      — the bare <code className="font-mono">python3</code> from PATH. Install selenium
+                      into it, or point <code className="font-mono">AUTODOP_PYTHON</code> at an
+                      interpreter that has it.
+                    </>
+                  )}
                 </>
               )}
             </p>
@@ -282,11 +291,52 @@ function DesktopSection(): React.ReactElement {
   );
 }
 
+/**
+ * Which build you are looking at — the answer to "did the install actually
+ * replace the last one?".
+ */
+function BuildSection(): React.ReactElement {
+  const { ready, info } = useDesktop();
+
+  if (!ready || !info) {
+    return (
+      <Section title="This build">
+        <p className="text-xs text-slate-500">Available in the desktop app only.</p>
+      </Section>
+    );
+  }
+
+  return (
+    <Section title="This build">
+      <dl className="flex flex-col gap-1 text-[11px] leading-relaxed">
+        <div className="flex gap-2">
+          <dt className="w-20 shrink-0 text-slate-400">Version</dt>
+          <dd className="font-mono text-slate-700">{info.version}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-20 shrink-0 text-slate-400">Built from</dt>
+          <dd className="font-mono text-slate-700">{info.build}</dd>
+        </div>
+        <div className="flex gap-2">
+          <dt className="w-20 shrink-0 text-slate-400">Runner</dt>
+          <dd className="font-mono text-slate-700">
+            {info.scraper_kind === 'sidecar' ? 'self-contained' : 'script + Python'}
+          </dd>
+        </div>
+      </dl>
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+        The installer is named after the version, so two builds never look alike.
+      </p>
+    </Section>
+  );
+}
+
 /** How the resolved `scraper.py` is described in the UI. */
 const SCRAPER_SOURCE_LABEL: Record<string, string> = {
   chosen: 'chosen here',
   env: 'AUTODOP_SCRAPER',
-  bundled: 'built into the app',
+  sidecar: 'built in — no Python needed',
+  bundled: 'bundled script (needs Python)',
   repo: 'repo checkout (dev)',
   cwd: 'working directory',
 };
@@ -345,8 +395,8 @@ function ScraperSection(): React.ReactElement {
       {ready ? (
         <>
           <p className="mb-2 text-xs leading-relaxed text-slate-500">
-            The Python script that drives the DOP portal. Every build carries its own copy, so
-            there is normally nothing to set here.
+            The runner that drives the DOP portal. Builds carry a self-contained copy, so there is
+            normally nothing to set here.
           </p>
           {location ? (
             <div className="mb-2 flex flex-col gap-1 rounded-lg bg-slate-50 px-2.5 py-2">
@@ -376,8 +426,14 @@ function ScraperSection(): React.ReactElement {
             </div>
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-            This only picks the script. <code className="font-mono">selenium</code> and Chrome still
-            have to be installed — see Python above.
+            {location?.kind === 'sidecar' ? (
+              <>This copy carries its own Python and selenium, so only Chrome has to be installed.</>
+            ) : (
+              <>
+                This only picks the script. <code className="font-mono">selenium</code> and Chrome
+                still have to be installed — see Python above.
+              </>
+            )}
           </p>
         </>
       ) : (
@@ -596,6 +652,7 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
           <DatabaseSection />
           <DesktopSection />
           <ScraperSection />
+          <BuildSection />
         </div>
 
         <div className="mt-4 border-t border-slate-200 pt-3">

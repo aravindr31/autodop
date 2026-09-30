@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useStore } from '../lib/store';
 import { Lock, UserPlus, LogIn } from 'lucide-react';
 import { Button } from './ui';
+import { VersionLine } from './VersionLine';
 
 const FIELD =
   'w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-3 pr-3 text-sm placeholder:text-slate-400 focus:border-indigo-400 focus:outline-2 focus:outline-offset-0 focus:outline-indigo-200';
@@ -75,6 +76,7 @@ export default function AuthScreen(): React.ReactElement {
         <p className="mt-4 text-center text-[11px] leading-snug text-slate-400">
           This protects the local workspace only. Real authentication comes from the separately-deployed backend.
         </p>
+        <VersionLine className="mt-3 text-center" />
       </form>
     </div>
   );

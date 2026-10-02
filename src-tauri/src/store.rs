@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS runs (
     detail      TEXT
 );
 
--- Small key/value corner: which schema version wrote this, whether the Atlas
+-- Small key/value corner: which schema version wrote this, whether the
 -- import has run, and anything else that must survive a restart.
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -170,7 +170,7 @@ impl Store {
             .map_err(|error| error.to_string())
     }
 
-    /// Replace every account — used by the one-time Atlas import.
+    /// Replace every account.
     pub fn replace_accounts(&self, rows: &[Value]) -> Result<usize, String> {
         let tx = self
             .conn
@@ -317,7 +317,7 @@ impl Store {
     }
 
     /// Upsert lists by id/name and replace their contents. Mirrors what the
-    /// Atlas writer did, so the frontend contract is unchanged.
+    /// old writer did, so the frontend contract is unchanged.
     pub fn save_lists(&self, lists: &[InputList]) -> Result<Vec<DbList>, String> {
         let tx = self
             .conn
@@ -532,7 +532,7 @@ impl Store {
 }
 
 /// A 24-hex id in the same shape as a Mongo ObjectId, so ids stay interchangeable
-/// with anything imported from Atlas.
+/// with anything imported.
 pub fn new_id() -> String {
     let mut bytes = [0u8; 12];
     if getrandom::getrandom(&mut bytes).is_err() {

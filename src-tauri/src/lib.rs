@@ -578,8 +578,6 @@ fn file_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
 /// 1. `DOP_USERNAME` / `DOP_PASSWORD` (environment or a `.env`)
 /// 2. the local database
 /// 3. the older app-config `credentials.json`
-/// 4. the `users` collection in Atlas — a read-only fallback that exists only
-///    until the one-time import has been run on this machine
 ///
 /// The password stays on this side — it is only ever handed to the runner.
 async fn resolve_credentials(app: &AppHandle) -> Result<db::DopCredentials, String> {
@@ -592,7 +590,7 @@ async fn resolve_credentials(app: &AppHandle) -> Result<db::DopCredentials, Stri
     if let Some(credentials) = file_credentials(app) {
         return Ok(credentials);
     }
-    db::fetch_atlas_credentials(app).await
+    Err("No DOP password saved yet — add it in Manage.".into())
 }
 
 #[tauri::command]
@@ -862,8 +860,8 @@ fn iso_minute(epoch: u64) -> String {
 /// frontend as a `scraper-progress` event and returns the parsed result array.
 #[tauri::command]
 async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
-    // Credentials: env/`.env` first, then the config file, then the `users`
-    // collection in Atlas (Fernet-decrypted). The password never leaves Rust.
+    // Credentials: env/`.env` first, then the config file, then the local
+    // database. The password never leaves Rust.
     let credentials = match resolve_credentials(&app).await {
         Ok(credentials) => credentials,
         Err(error) => {
@@ -1114,7 +1112,7 @@ fn tail(text: &str, limit: usize) -> Option<String> {
 // entrypoint                                                                  //
 // --------------------------------------------------------------------------- //
 
-/// What the local database holds. Replaces the old Atlas status.
+/// What the local database holds.
 #[derive(Debug, Serialize)]
 pub struct LocalStatus {
     pub path: String,
@@ -1122,29 +1120,22 @@ pub struct LocalStatus {
     pub lists: i64,
     pub entries: i64,
     pub has_credentials: bool,
-    /// When the one-time Atlas import last ran on this machine.
-    pub atlas_imported_at: Option<String>,
-    /// Whether an Atlas connection is configured at all (the import source).
-    pub atlas_available: bool,
     pub error: Option<String>,
 }
 
 #[tauri::command]
 fn local_status(app: AppHandle) -> LocalStatus {
+    let error = |error: String| LocalStatus {
+        path: String::new(),
+        accounts: 0,
+        lists: 0,
+        entries: 0,
+        has_credentials: false,
+        error: Some(error),
+    };
     let path = match store_path(&app) {
         Ok(path) => path,
-        Err(error) => {
-            return LocalStatus {
-                path: String::new(),
-                accounts: 0,
-                lists: 0,
-                entries: 0,
-                has_credentials: false,
-                atlas_imported_at: None,
-                atlas_available: false,
-                error: Some(error),
-            }
-        }
+        Err(message) => return error(message),
     };
 
     match open_store(&app) {
@@ -1161,32 +1152,12 @@ fn local_status(app: AppHandle) -> LocalStatus {
                     lists: counts.lists,
                     entries: counts.entries,
                     has_credentials,
-                    atlas_imported_at: store.meta("atlas_imported_at"),
-                    atlas_available: db::load_db_config(Some(&app)).is_some(),
                     error: None,
                 }
             }
-            Err(error) => LocalStatus {
-                path: path.display().to_string(),
-                accounts: 0,
-                lists: 0,
-                entries: 0,
-                has_credentials: false,
-                atlas_imported_at: None,
-                atlas_available: false,
-                error: Some(error),
-            },
+            Err(message) => error(message),
         },
-        Err(error) => LocalStatus {
-            path: path.display().to_string(),
-            accounts: 0,
-            lists: 0,
-            entries: 0,
-            has_credentials: false,
-            atlas_imported_at: None,
-            atlas_available: false,
-            error: Some(error),
-        },
+        Err(message) => error(message),
     }
 }
 
@@ -1325,142 +1296,6 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     })
 }
 
-/// What the one-time Atlas import moved across.
-#[derive(Debug, Serialize, Default)]
-pub struct ImportReport {
-    pub accounts: usize,
-    pub lists: usize,
-    pub entries: usize,
-    pub credentials: bool,
-    pub warnings: Vec<String>,
-}
-
-/// Everything the import needs, already read from Atlas.
-///
-/// Kept separate from the write so no SQLite connection is alive across an
-/// `await` — `rusqlite::Connection` is not `Send`, and a Tauri command's future
-/// must be.
-pub struct AtlasDump {
-    pub accounts: Vec<Value>,
-    pub lists: Option<Vec<db::DbList>>,
-    pub lists_error: Option<String>,
-    pub credentials: Option<(String, String)>,
-    pub credentials_error: Option<String>,
-}
-
-/// Read accounts, lists and the DOP pair out of Atlas. Store-free.
-pub async fn read_atlas(cfg: &db::DbConfig, atlas_key: &str) -> Result<AtlasDump, String> {
-    let accounts = db::fetch_accounts_with(cfg)
-        .await
-        .map_err(|error| format!("reading accounts from Atlas failed: {error}"))?;
-
-    let (lists, lists_error) = match db::fetch_lists_with(cfg).await {
-        Ok(lists) => (Some(lists), None),
-        Err(error) => (None, Some(format!("lists: {error}"))),
-    };
-
-    let (credentials, credentials_error) =
-        match db::fetch_atlas_credentials_with(cfg, atlas_key).await {
-            Ok(creds) => (Some((creds.username, creds.password)), None),
-            Err(error) => (None, Some(format!("credentials: {error}"))),
-        };
-
-    Ok(AtlasDump {
-        accounts,
-        lists,
-        lists_error,
-        credentials,
-        credentials_error,
-    })
-}
-
-/// Write an [`AtlasDump`] into the local database, re-encrypting the password
-/// under `dest_key`. Synchronous on purpose — see [`AtlasDump`].
-pub fn write_import(
-    store: &store::Store,
-    dump: &AtlasDump,
-    dest_key: &str,
-) -> Result<ImportReport, String> {
-    let mut report = ImportReport::default();
-    report.accounts = store.replace_accounts(&dump.accounts)?;
-
-    if let Some(error) = &dump.lists_error {
-        report.warnings.push(error.clone());
-    }
-    if let Some(lists) = &dump.lists {
-        let input: Vec<db::InputList> = lists
-            .iter()
-            .map(|list| db::InputList {
-                id: list.id.clone(),
-                name: list.name.clone(),
-                active: list.active,
-                entries: list
-                    .entries
-                    .iter()
-                    .map(|entry| db::InputEntry {
-                        id: entry.id.clone(),
-                        rebate: entry.rebate,
-                    })
-                    .collect(),
-            })
-            .collect();
-        report.entries = input.iter().map(|list| list.entries.len()).sum();
-        match store.save_lists(&input) {
-            Ok(saved) => report.lists = saved.len(),
-            Err(error) => report.warnings.push(format!("lists: {error}")),
-        }
-    }
-
-    if let Some(error) = &dump.credentials_error {
-        report.warnings.push(error.clone());
-    }
-    if let Some((username, password)) = &dump.credentials {
-        match crypt::encrypt(dest_key, password) {
-            Ok(token) => {
-                store.set_credentials(username, &token)?;
-                report.credentials = true;
-            }
-            Err(error) => report.warnings.push(format!("credentials: {error}")),
-        }
-    }
-
-    store.set_meta("atlas_imported_at", &rfc3339_utc(now_secs()))?;
-    Ok(report)
-}
-
-/// Copy the Atlas data into the local database — once, then Atlas is done.
-///
-/// Destructive by design: it replaces local accounts and lists, so it refuses to
-/// run over existing data unless `force` is set. The DOP password is re-encrypted
-/// under this machine's own key on the way in, so Atlas never needed to be
-/// writable.
-#[tauri::command]
-async fn import_from_atlas(app: AppHandle, force: bool) -> Result<ImportReport, String> {
-    let existing = {
-        let store = open_store(&app)?;
-        store.counts().map_err(|error| error.to_string())?
-    };
-    if existing.accounts > 0 && !force {
-        return Err(format!(
-            "the local database already has {} accounts — confirm to replace them with the Atlas copy",
-            existing.accounts
-        ));
-    }
-
-    let cfg = db::load_db_config(Some(&app))
-        .ok_or("No MONGO_URI configured — there is nothing to import from.")?;
-    let atlas_key = db::fernet_key(Some(&app))
-        .ok_or("FERNET_KEY is not configured, so the Atlas copy cannot be read.")?;
-    let dest_key = unlocked_key(&app).ok_or(
-        "Sign in first — the DOP password is re-encrypted with a key derived from your password.",
-    )?;
-
-    // Read first, then write: the connection must not be alive across an await.
-    let dump = read_atlas(&cfg, &atlas_key).await?;
-    let store = open_store(&app)?;
-    write_import(&store, &dump, &dest_key)
-}
-
 /// Which DOP credentials the app would use, and where they come from.
 ///
 /// Never returns the password — only the portal id and the source.
@@ -1471,14 +1306,12 @@ async fn dop_credentials_status(app: AppHandle) -> db::DopCredentialStatus {
             username: credentials.username,
             source: credentials.source,
             has_password: !credentials.password.trim().is_empty(),
-            atlas_available: true,
             detail: None,
         },
         Err(error) => db::DopCredentialStatus {
             username: String::new(),
-            source: db::CredentialSource::Atlas,
+            source: db::CredentialSource::Local,
             has_password: false,
-            atlas_available: false,
             detail: Some(error),
         },
     }
@@ -1505,7 +1338,6 @@ pub fn run() {
             generate_lists,
             dop_credentials_status,
             local_status,
-            import_from_atlas,
             load_accounts,
             load_lists,
             save_lists,

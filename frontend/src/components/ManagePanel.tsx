@@ -12,7 +12,6 @@ import {
   saveCredentials,
   useDesktop,
   localStatus,
-  importFromAtlas,
   loadAccountsFromDb,
   loadLists,
   saveLists,
@@ -576,15 +575,13 @@ function BackupSection(): React.ReactElement {
  * The local database — one SQLite file on this machine.
  *
  * Nothing is shared with anyone else, so there is no connection to check, no
- * role to grant, and no read-only caveat. Atlas appears here only as the
- * one-time import source for the data this app started out with.
+ * role to grant, and no read-only caveat.
  */
 function DatabaseSection(): React.ReactElement {
   const { ready } = useDesktop();
   const shown = useStore((s) => s.accounts.length);
   const [status, setStatus] = useState<LocalStatus | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirmingImport, setConfirmingImport] = useState(false);
 
   const check = useCallback(async () => {
     setStatus(await localStatus());
@@ -638,30 +635,6 @@ function DatabaseSection(): React.ReactElement {
     void check();
   };
 
-  const runImport = async (force: boolean) => {
-    setBusy(true);
-    const res = await importFromAtlas(force);
-    setBusy(false);
-    setConfirmingImport(false);
-    if (!res.ok) {
-      notify(res.error ?? 'Import failed', 'error');
-      return;
-    }
-    const report = res.report;
-    notify(
-      `Imported ${report?.accounts ?? 0} accounts, ${report?.lists ?? 0} lists` +
-        (report?.credentials ? ', and the DOP password' : ''),
-      'success',
-    );
-    for (const warning of report?.warnings ?? []) notify(warning, 'error');
-    // Show it immediately rather than waiting for a restart.
-    const accounts = await loadAccountsFromDb();
-    if (accounts.ok && accounts.accounts) useStore.getState().setAccounts(accounts.accounts);
-    const lists = await loadLists();
-    if (lists.ok && lists.lists) useStore.getState().setLists(lists.lists, lists.activeId);
-    void check();
-  };
-
   return (
     <Section title="Local database">
       {!ready ? (
@@ -704,49 +677,6 @@ function DatabaseSection(): React.ReactElement {
               Save lists
             </Button>
           </div>
-          {status?.atlas_available ? (
-            <div className="mt-3 border-t border-slate-100 pt-2">
-              <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
-                {status.atlas_imported_at ? (
-                  <>
-                    Imported from Atlas on{' '}
-                    <span className="font-mono">{status.atlas_imported_at}</span>. Running it again
-                    replaces the local accounts and lists with the Atlas copy.
-                  </>
-                ) : (
-                  <>
-                    Atlas still holds the data this app started with. Import it once — accounts,
-                    lists, and the DOP password re-encrypted with this machine&rsquo;s own key — and
-                    nothing here depends on Atlas afterwards.
-                  </>
-                )}
-              </p>
-              {confirmingImport ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-rose-700">
-                    Replace the local accounts and lists with the Atlas copy?
-                  </span>
-                  <Button variant="danger" size="sm" disabled={busy} onClick={() => void runImport(true)}>
-                    Yes, import
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => setConfirmingImport(false)}>
-                    Cancel
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  variant="secondary"
-                  className="!w-full"
-                  disabled={busy}
-                  onClick={() =>
-                    (status.accounts > 0 ? setConfirmingImport(true) : void runImport(false))
-                  }
-                >
-                  <Database className="h-4 w-4" />Import from Atlas
-                </Button>
-              )}
-            </div>
-          ) : null}
           <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
             One SQLite file on this machine, owned by this app. Nothing is shared with anyone else, so
             there is no connection to check and no role to grant.
@@ -775,8 +705,6 @@ function CredentialSourceNote(): React.ReactElement {
   const source =
     status.source === 'local'
       ? "this app's database"
-      : status.source === 'atlas'
-        ? 'Atlas (users → UserInfo)'
         : status.source === 'env'
           ? 'DOP_USERNAME / DOP_PASSWORD'
           : "this app's config file";

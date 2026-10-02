@@ -97,23 +97,10 @@ export interface LocalStatus {
   lists: number;
   entries: number;
   has_credentials: boolean;
-  /** When the one-time Atlas import last ran here, if it has. */
-  atlas_imported_at?: string | null;
-  /** Whether an Atlas connection is configured as an import source. */
-  atlas_available: boolean;
   error?: string;
 }
 
-/** What a one-time Atlas import moved across. */
-export interface ImportReport {
-  accounts: number;
-  lists: number;
-  entries: number;
-  credentials: boolean;
-  warnings: string[];
-}
-
-/** A list as stored in Atlas (`savedList`). */
+/** A list as stored in the local database. */
 export interface DbListEntry {
   id: string;
   rebate: number;
@@ -316,24 +303,7 @@ export async function importBackup(
   }
 }
 
-/**
- * Copy the Atlas data into the local database — once, then Atlas is done.
- *
- * Replaces local accounts and lists, so it refuses to run over existing data
- * unless `force` is set.
- */
-export async function importFromAtlas(
-  force = false,
-): Promise<{ ok: boolean; error?: string; report?: ImportReport }> {
-  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
-  try {
-    return { ok: true, report: await invoke<ImportReport>('import_from_atlas', { force }) };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-/** Fetch all accounts from Atlas (db `accounts`, collection `accountHolders`). */
+/** Load every account from the local database. */
 export async function loadAccountsFromDb(): Promise<{
   ok: boolean;
   accounts?: Account[];
@@ -348,7 +318,7 @@ export async function loadAccountsFromDb(): Promise<{
   }
 }
 
-/** Convert an Atlas `savedList` document into the local list shape. */
+/** Convert a stored list into the local list shape. */
 export function dbListToLocal(list: DbList): AccountList {
   // Keep every rebate, including 1: it is a meaningful value ("skip the rebate
   // step" in scraper.py). Filtering it out here made an explicit 1 silently
@@ -366,7 +336,7 @@ export function dbListToLocal(list: DbList): AccountList {
   return local;
 }
 
-/** Convert a local list into the document shape Atlas expects. */
+/** Convert a local list into the stored shape. */
 export function localListToDb(list: AccountList, active: boolean): DbList {
   return {
     id: list.id,
@@ -377,7 +347,7 @@ export function localListToDb(list: AccountList, active: boolean): DbList {
   };
 }
 
-/** Load the saved lists from Atlas. */
+/** Load the saved lists from the local database. */
 export async function loadLists(): Promise<{
   ok: boolean;
   lists?: AccountList[];
@@ -397,7 +367,7 @@ export async function loadLists(): Promise<{
   }
 }
 
-/** Upsert the local lists to Atlas; resolves with what is now stored. */
+/** Upsert the local lists; resolves with what is now stored. */
 export async function saveLists(
   lists: AccountList[],
   activeListId: string,
@@ -415,9 +385,8 @@ export async function saveLists(
 /** Which DOP credentials the app would use, and where they come from. */
 export interface DopCredentialStatus {
   username: string;
-  source: 'env' | 'local' | 'config' | 'atlas';
+  source: 'env' | 'local' | 'config';
   has_password: boolean;
-  atlas_available: boolean;
   detail?: string;
 }
 

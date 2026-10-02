@@ -72,9 +72,9 @@ export interface AppState {
   // ---- account actions ----
   addAccount: (input: NewAccountInput) => Account;
   deleteAccount: (id: string) => boolean;
-  /** Replace the whole account list (e.g. after loading from Atlas). */
+  /** Replace the whole account list (e.g. after reloading from the database). */
   setAccounts: (accounts: Account[]) => void;
-  /** Replace every list (e.g. after loading from or saving to Atlas). */
+  /** Replace every list (e.g. after loading from or saving to the database). */
   setLists: (lists: AccountList[], activeListId?: string) => void;
 
   // ---- auth actions (async: WebCrypto, or the backend in the desktop app) ----

@@ -1,13 +1,9 @@
-/**
- * Shared UI primitives: buttons, badges, empty states, tooltips, toast stack.
- * Styling is utility-class based (Tailwind v4); no @apply, so builds stay safe.
- */
 import type { ReactNode } from 'react';
 import { Check, X } from 'lucide-react';
 
-/* ------------------------------------------------------------------ */
-/* Button                                                              */
-/* ------------------------------------------------------------------ */
+
+
+
 
 interface ButtonProps {
   onClick?: () => void;
@@ -45,7 +41,7 @@ export function Button({ onClick, disabled, variant = 'secondary', size = 'md', 
   );
 }
 
-/** Small 1:1 icon button used for row actions (remove, expand). */
+
 export function IconButton({
   onClick,
   disabled,
@@ -77,9 +73,9 @@ export function IconButton({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Badge / pill                                                          */
-/* ------------------------------------------------------------------ */
+
+
+
 
 export function Pill({
   children,
@@ -103,9 +99,9 @@ export function Pill({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Empty state                                                           */
-/* ------------------------------------------------------------------ */
+
+
+
 
 export function EmptyState({ icon, title, hint }: { icon?: ReactNode; title: string; hint?: string }): React.ReactElement {
   return (
@@ -117,9 +113,9 @@ export function EmptyState({ icon, title, hint }: { icon?: ReactNode; title: str
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Toast stack (rendered by the App shell)                               */
-/* ------------------------------------------------------------------ */
+
+
+
 
 export interface ToastView {
   id: number;

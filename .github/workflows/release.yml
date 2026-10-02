@@ -1,20 +1,5 @@
 name: release
 
-# Ship AutoDOP for macOS, Windows and Linux when a PR merges to main.
-#
-# 1. `test` runs the full suite on the merge commit.
-# 2. `version` derives the next version from conventional commit messages
-#    since the last release (feat → minor, fix → patch, breaking → major;
-#    chore-only merges still bump patch so every release is newer), writes
-#    VERSION + CHANGELOG.md + all version fields, commits that as
-#    `chore(release): vX.Y.Z [skip ci]` and tags it.
-# 3. `build` builds on three runners from that release commit and attaches
-#    the installers to the GitHub release, with the changelog section as the
-#    release notes.
-#
-# Merges that only touch docs/workflows skip this workflow entirely
-# (paths-ignore below).
-
 on:
   push:
     branches: [main]
@@ -69,7 +54,7 @@ jobs:
         run: cd frontend && npm run smoke
 
   version:
-    needs: test # never derive a release from a failing merge
+    needs: test
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.bump.outputs.version }}
@@ -78,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history: commits since the last release tag
+          fetch-depth: 0
           token: ${{ secrets.RELEASE_TOKEN || github.token }}
 
       - uses: actions/setup-node@v4
@@ -111,15 +96,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest # arm64
+          - os: macos-latest
             name: macOS (Apple Silicon)
           - os: windows-latest
             name: Windows (x64)
-          - os: ubuntu-22.04 # older glibc → runs on more distros
+          - os: ubuntu-22.04
             name: Linux (x64)
     runs-on: ${{ matrix.os }}
     steps:
-      # Build exactly the tagged release commit, not whatever main moved to.
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.sha }}

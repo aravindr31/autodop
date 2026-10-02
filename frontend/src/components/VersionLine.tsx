@@ -1,9 +1,3 @@
-/**
- * Which build is running.
- *
- * Every build carries the commit it came from, so this is how you confirm an
- * install actually replaced the previous one instead of silently doing nothing.
- */
 import { useDesktop } from '../lib/bridge';
 
 export function VersionLine({ className = '' }: { className?: string }): React.ReactElement | null {

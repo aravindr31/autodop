@@ -1,10 +1,3 @@
-/**
- * Bundles the REAL src/lib/store.ts + src/lib/accounts.ts (JSON + Zustand
- * included) with esbuild into a temp dir, then runs the store smoke test
- * in-process.
- *
- *   npm run smoke
- */
 import { build } from 'esbuild';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';

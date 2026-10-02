@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-/**
- * Set the app version everywhere it appears, so the installer filename, the
- * version shown in the UI, and the crate never drift apart.
- *
- *   npm run version:bump -- 0.2.0
- *
- * tauri.conf.json is the one that names the installer (AutoDOP_<version>_<arch>.dmg),
- * so a bump is what makes a new build tell itself apart from the previous one.
- */
+
+
+
+
+
+
+
+
+
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

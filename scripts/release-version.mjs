@@ -1,21 +1,21 @@
 #!/usr/bin/env node
-/**
- * Compute the next release version from commit messages and write it
- * everywhere, plus the CHANGELOG.md entry. Conventional commits only:
- *
- *   fix: …            → patch
- *   feat: …           → minor
- *   anything!: … or a BREAKING CHANGE footer → major
- *   chore:/docs:/ci:… → no feature value, but the release always moves —
- *                       a merge with none of the above still bumps patch,
- *                       so every main-merge produces a newer build.
- *
- *   node scripts/release-version.mjs [--dry]
- *
- * `--dry` prints what would happen without touching files. The version
- * travels in the VERSION file; every other field is kept in step by
- * bump-version.mjs's writer.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -36,12 +36,12 @@ const bumpOf = (version, part) => {
   return `${major}.${minor}.${patch + 1}`;
 };
 
-// Everything since the last release tag; with no tag yet, all commits.
+
 const lastTag = git(['tag', '--list', 'v*', '--sort=-v:refname']).split('\n')[0] || '';
 const range = lastTag ? `${lastTag}..HEAD` : 'HEAD';
 const commits = git(['log', '--format=%s%x09%b', range]).split('\n').filter(Boolean);
 
-let part = null; // highest bump seen
+let part = null;
 const groups = { feat: [], fix: [], other: [], breaking: [] };
 for (const line of commits) {
   const [subject, ...body] = line.split('\t');
@@ -62,10 +62,10 @@ for (const line of commits) {
     groups.other.push(subject);
   }
 }
-// A merge with only chores/docs still ships a newer build.
+
 const next = bumpOf(current, part ?? 'patch');
 
-// ---- CHANGELOG.md ----
+
 const today = new Date().toISOString().slice(0, 10);
 const section = [`## v${next} — ${today}`, ''];
 const push = (title, items) => {
@@ -81,7 +81,7 @@ push('Other', groups.other);
 
 const changelogPath = join(root, 'CHANGELOG.md');
 let changelog = readFileSync(changelogPath, 'utf8');
-// Replace an entry for the same version (a re-run) or prepend the new one.
+
 const heading = `## v${next}`;
 const start = changelog.indexOf(`\n${heading}`);
 if (start >= 0) {
@@ -103,7 +103,7 @@ if (dry) {
 writeFileSync(versionFile, `${next}\n`);
 writeFileSync(changelogPath, changelog);
 
-// Keep every version field in step (same writer `npm run version:bump` uses).
+
 const targets = [
   { file: 'src-tauri/tauri.conf.json', pattern: /("version"\s*:\s*")[^"]+(")/ },
   { file: 'src-tauri/Cargo.toml', pattern: /(^version\s*=\s*")[^"]+(")/m },

@@ -1,17 +1,13 @@
-/**
- * Backend integration (spec §4.3): POST the account objects of a list to a
- * configurable endpoint and report success/failure back to the UI.
- */
 import type { Account, AccountList } from './types';
 
 export interface SubmitResult {
   ok: boolean;
   status?: number;
-  /** Human-readable message for the UI to surface. */
+
   message: string;
 }
 
-/** Serializes an account into the exact document shape from spec §2. */
+
 function toDocument(account: Account, listName: string): Record<string, unknown> {
   return {
     Number: account.Number,
@@ -24,10 +20,10 @@ function toDocument(account: Account, listName: string): Record<string, unknown>
   };
 }
 
-/**
- * Resolve an account by id. A resolver is injected rather than importing the
- * live store here so this module stays a pure library.
- */
+
+
+
+
 export type AccountResolver = (id: string) => Account | undefined;
 
 export async function submitList(

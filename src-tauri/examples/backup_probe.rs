@@ -1,16 +1,3 @@
-//! Exercise backup / restore without the app.
-//!
-//!     cd src-tauri && cargo run --example backup_probe                  # temp roundtrip
-//!     cargo run --example backup_probe -- export /path/to/backup.db    # real backup
-//!     cargo run --example backup_probe -- inspect /path/to/backup.db   # what it holds
-//!
-//! With no argument: builds a scratch database, backs it up, mutates the
-//! live one, restores, and verifies everything came back. Never touches the
-//! real database and never prints a password.
-//!
-//! `export` and `inspect` with a path are read-only against the live store
-//! (export writes only the destination file).
-
 use autodop_lib::backup;
 use autodop_lib::store::Store;
 use serde_json::json;
@@ -45,8 +32,7 @@ fn main() {
             let source = live_store_path();
             println!("source: {}", source.display());
             let store = Store::open(&source).expect("live store opens");
-            // The portable export needs no password: the DOP token, the salt
-            // and the login hash travel as the store already holds them.
+
             let owner = store
                 .owners()
                 .expect("owners")
@@ -96,7 +82,6 @@ fn main() {
     }
 }
 
-/// The path the running app uses, when it can be found — informational only.
 fn live_store_path() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
         let path =
@@ -114,8 +99,6 @@ fn roundtrip() {
     let live = dir.join("autodop.db");
     let backup_path = dir.join("autodop-backup.db");
 
-    // 1. Seed a store the way the app would have, then close it — nothing
-    // may hold the live file open across the backup or the restore.
     let owner = {
         let store = Store::open(&live).expect("store opens");
         let owner = store
@@ -155,11 +138,9 @@ fn roundtrip() {
         owner
     };
 
-    // 2. Back it up.
     let snapshot = backup::export(&live, &backup_path).expect("export succeeds");
     println!("backup:  {snapshot:?} -> {}", backup_path.display());
 
-    // 3. Wreck the live one, in its own scope.
     {
         let store = Store::open(&live).expect("store reopens");
         store.clear_all_lists(&owner).expect("lists cleared");
@@ -170,8 +151,6 @@ fn roundtrip() {
         println!("damaged: {before:?}");
     }
 
-    // 4. Restore exactly the way `import_backup` does: drop every connection,
-    // remove WAL sidecars, copy, remove sidecars again.
     for sidecar in ["-wal", "-shm"] {
         let _ = std::fs::remove_file(dir.join(format!("autodop.db{sidecar}")));
     }
@@ -195,7 +174,6 @@ fn roundtrip() {
         backup::inspect(&backup_path).expect("backup still reads")
     );
 
-    // 5. Safety: a foreign file must not be overwritten.
     let foreign = dir.join("foreign.db");
     let alien = rusqlite::Connection::open(&foreign).expect("alien opens");
     alien

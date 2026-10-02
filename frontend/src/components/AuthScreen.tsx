@@ -1,12 +1,3 @@
-/**
- * Login / first-run setup screen. A workspace is one person: they sign in with
- * their DOP portal id (a mobile number) and their own login password, and
- * every account, list and credential on this machine is scoped to them.
- *
- * On first run they set both. After that the remembered username shows
- * automatically and only the password is asked — with a link to switch to
- * another workspace (or add one) instead.
- */
 import { useState } from 'react';
 import { useStore } from '../lib/store';
 import { ChevronLeft, Lock, UserPlus, LogIn, Users } from 'lucide-react';
@@ -23,7 +14,7 @@ export default function AuthScreen(): React.ReactElement {
   const selected = useStore((s) => s.selectedOwner);
   const owners = useStore((s) => s.owners);
   const [choosing, setChoosing] = useState(false);
-  /** Setup form shown on a machine that already has workspaces. */
+
   const [adding, setAdding] = useState(false);
   const [username, setUsername] = useState('');
   const [pw, setPw] = useState('');

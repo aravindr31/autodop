@@ -1,17 +1,11 @@
 name: ci
 
-# Gate: every push and PR runs the real test suite — Rust unit tests (which
-# include the schema migration), the frontend type check, and the store smoke
-# test. Releases (release.yml) only build once this has passed on the branch.
-
 on:
   push:
     branches: ['**']
   pull_request:
 
 jobs:
-  # PRs must come from a feature/fix/hotfix branch — never straight from
-  # main. Conventional commit types map to releases (see README).
   pr-source:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -41,8 +35,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # The Rust tests need SQLite only (bundled); no GTK stack required —
-      # the app itself is not built here, that is release.yml's job.
       - name: Install Linux prerequisites
         run: |
           sudo apt-get update

@@ -1,16 +1,3 @@
-/**
- * Reactive application store (Zustand) with localStorage persistence
- * (spec §5). Every mutation is a pure action on the store — the UI layer
- * derives "addedIn" from list membership rather than duplicating it.
- *
- * The store also owns the live `accounts` array (seeded from
- * `src/data/accounts.json`) so accounts can be added/deleted, and a client-side
- * session credential (see `./auth.ts`) for the login gate.
- *
- * Persistence is a small hand-rolled layer on zustand's `create` + `subscribe`
- * (the upstream `zustand/middleware/persist` is absent from this npm mirror,
- * and rolling our own keeps the app dependency-light and SSR-safe).
- */
 import { create } from 'zustand';
 import type { Account, AccountList, AuthCredential, NewAccountInput } from './types';
 import type { OwnerInfo } from './bridge';
@@ -33,71 +20,71 @@ import {
 
 export interface ListSummary {
   count: number;
-  /** Sum of account Denomination values (numeric). */
+
   amount: number;
 }
 
 export interface AppState {
-  // ---- persisted data ----
+
   accounts: Account[];
   lists: AccountList[];
   activeListId: string;
   submitEndpoint: string;
   auth: AuthCredential | null;
 
-  // ---- session (not persisted) ----
+
   loggedIn: boolean;
-  /** Workspaces known on this machine (desktop app). */
+
   owners: OwnerInfo[];
-  /** The workspace this session is signed into. */
+
   currentOwner: OwnerInfo | null;
-  /** The workspace shown on the login screen (remembered in localStorage). */
+
   selectedOwner: OwnerInfo | null;
-  /**
-   * Whether a login password exists. In the desktop app the backend owns this,
-   * because the same password derives the key protecting the DOP password.
-   */
+
+
+
+
   authConfigured: boolean;
-  /** False until the backend has been asked — avoids prompting for the wrong thing. */
+
   authReady: boolean;
 
-  // ---- derived selectors ----
+
   accountByIdNow: (id: string) => Account | undefined;
   listNameOf: (accountId: string) => string;
   isAdded: (accountId: string) => boolean;
   totalsOf: (listId: string) => ListSummary;
 
-  // ---- list actions ----
+
   createList: (name?: string) => { id: string; name: string };
   renameList: (id: string, name: string) => void;
   deleteList: (id: string) => void;
   setActiveList: (id: string) => void;
   addToActive: (accountId: string) => void;
   removeFromList: (listId: string, accountId: string) => void;
-  /** Set one account's rebate (RD installment no.) within a list. */
+
   setRebate: (listId: string, accountId: string, rebate: number) => void;
   clearList: (listId: string) => void;
-  /** Empty every list at once, keeping the lists. Returns accounts removed. */
+
   clearAllLists: () => number;
   setSubmitEndpoint: (endpoint: string) => void;
 
-  // ---- account actions ----
+
   addAccount: (input: NewAccountInput) => Account;
   deleteAccount: (id: string) => boolean;
-  /** Replace the whole account list (e.g. after reloading from the database). */
+
   setAccounts: (accounts: Account[]) => void;
-  /** Replace every list (e.g. after loading from or saving to the database). */
+
   setLists: (lists: AccountList[], activeListId?: string) => void;
 
-  // ---- auth actions (async: WebCrypto, or the backend in the desktop app) ----
+
   setupPassword: (username: string, password: string) => Promise<void>;
-  /** Sign into `owner`; defaults to the remembered/selected workspace. */
+
   login: (password: string, owner?: OwnerInfo) => Promise<boolean>;
-  /** Show a different workspace on the login screen. */
+
   selectOwner: (owner: OwnerInfo) => void;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
-  /** Ask the backend whether a password is set, and whether we are unlocked. */
+
   refreshAuth: () => Promise<void>;
 }
 
@@ -105,12 +92,12 @@ const STORAGE_KEY = 'autodop-state-v1';
 const OWNER_KEY = 'autodop-last-owner';
 const PERSIST_VERSION = 1;
 
-/** The workspace shown on the login screen last time. */
+
 function rememberOwner(owner: OwnerInfo | null): void {
   try {
     if (owner) localStorage.setItem(OWNER_KEY, JSON.stringify({ id: owner.id, username: owner.username }));
     else localStorage.removeItem(OWNER_KEY);
-  } catch { /* private mode */ }
+  } catch {   }
 }
 
 function rememberedOwner(): OwnerInfo | null {
@@ -121,26 +108,26 @@ function rememberedOwner(): OwnerInfo | null {
     if (typeof parsed?.id === 'string' && typeof parsed?.username === 'string') {
       return { id: parsed.id, username: parsed.username, has_credentials: false };
     }
-  } catch { /* corrupt */ }
+  } catch {   }
   return null;
 }
 
-/**
- * Drop everything the previous session had on screen — accounts, lists and
- * the persisted copy of them. Workspaces are isolated in the database, but
- * the webview also keeps a local cache, and a new workspace must never
- * inherit the last user's rows. `submitEndpoint` survives: it is a per-
- * machine preference, not data.
- */
+
+
+
+
+
+
+
 function clearWorkspaceCache(): { accounts: Account[]; lists: AccountList[]; activeListId: string } {
-  try { localStorage.removeItem(STORAGE_KEY); } catch { /* private mode */ }
+  try { localStorage.removeItem(STORAGE_KEY); } catch {   }
   if (isDesktop()) {
     return { accounts: [], lists: structuredClone(DEFAULT_LISTS), activeListId: DEFAULT_LISTS[0].id };
   }
   return { accounts: SEED_ACCOUNTS, lists: structuredClone(DEFAULT_LISTS), activeListId: DEFAULT_LISTS[0].id };
 }
 
-/** Pull the signed-in owner's data out of the database. */
+
 async function loadWorkspaceFromDb(): Promise<{
   accounts: Account[];
   lists?: AccountList[];
@@ -152,7 +139,7 @@ async function loadWorkspaceFromDb(): Promise<{
   if (!lists.ok || !lists.lists) return { accounts: accounts.accounts };
   return {
     accounts: accounts.accounts,
-    lists: lists.lists.map(dbListToLocal),
+    lists: lists.lists,
     activeListId: lists.activeId,
   };
 }
@@ -192,7 +179,7 @@ interface Persisted {
   auth: AuthCredential | null;
 }
 
-/** Reads + validates persisted state. Returns null when absent/invalid/SSR. */
+
 function loadPersisted(): Persisted | null {
   if (typeof localStorage === 'undefined') return null;
   try {
@@ -212,7 +199,7 @@ function loadPersisted(): Persisted | null {
       l,
     ): l is AccountList => l !== null);
     if (lists.length === 0) return null;
-    // Migrate the legacy default name to the current "A" convention.
+
     if (!lists.some((l) => l.name === 'A')) {
       const legacy = lists.find((l) => l.name === 'Main List');
       if (legacy) legacy.name = 'A';
@@ -245,7 +232,7 @@ function loadPersisted(): Persisted | null {
   }
 }
 
-/** Sanitized initial state — defaults when nothing (valid) is persisted. */
+
 const initial = loadPersisted();
 const INITIAL_ACCOUNTS = initial?.accounts ?? SEED_ACCOUNTS;
 const INITIAL_LISTS = initial?.lists ?? DEFAULT_LISTS;
@@ -257,24 +244,24 @@ if (!INITIAL_ENDPOINT) {
 const INITIAL_AUTH = initial?.auth ?? null;
 
 export const useStore = create<AppState>()((set, get) => ({
-  // ---- persisted data ----
+
   accounts: INITIAL_ACCOUNTS,
   lists: INITIAL_LISTS,
   activeListId: INITIAL_ACTIVE,
   submitEndpoint: INITIAL_ENDPOINT,
   auth: INITIAL_AUTH,
 
-  // ---- session ----
+
   loggedIn: false,
-  // Optimistic until `refreshAuth` answers: a browser knows from its own
-  // storage, and the desktop app asks the backend.
+
+
   authConfigured: true,
   authReady: !isDesktop(),
   owners: [],
   currentOwner: null,
   selectedOwner: rememberedOwner(),
 
-  // ---- derived selectors ----
+
   accountByIdNow: (id) => get().accounts.find((a) => a._id === id),
   listNameOf: (accountId) =>
     get().lists.find((l) => l.accountIds.includes(accountId))?.name ?? '',
@@ -294,7 +281,7 @@ export const useStore = create<AppState>()((set, get) => ({
     return { count, amount };
   },
 
-  // ---- list actions ----
+
   createList: (name) => {
     const trimmed = (name ?? '').trim();
     const id = newId();
@@ -328,7 +315,7 @@ export const useStore = create<AppState>()((set, get) => ({
   addToActive: (accountId) => {
     const list = get().lists.find((l) => l.id === get().activeListId);
     if (!list) return;
-    if (get().isAdded(accountId)) return; // no-op: already belongs to a list
+    if (get().isAdded(accountId)) return;
     set({
       lists: get().lists.map((l) =>
         l.id === list.id ? { ...l, accountIds: [...l.accountIds, accountId] } : l
@@ -347,8 +334,8 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   clearList: (listId) => {
-    // Drop the rebates too: leaving them behind would resurrect an old value if
-    // the same account is added to the list again.
+
+
     set({
       lists: get().lists.map((l) =>
         l.id === listId ? { ...l, accountIds: [], rebates: {} } : l
@@ -366,8 +353,8 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 
   setRebate: (listId, accountId, rebate) => {
-    // Stored per account on the list. 1 is a meaningful value in scraper.py
-    // ("skip the rebate step"), so it has to survive a save/load round trip.
+
+
     set({
       lists: get().lists.map((l) =>
         l.id === listId ? { ...l, rebates: { ...l.rebates, [accountId]: rebate } } : l,
@@ -377,7 +364,7 @@ export const useStore = create<AppState>()((set, get) => ({
 
   setSubmitEndpoint: (endpoint) => set({ submitEndpoint: endpoint.trim() }),
 
-  // ---- account actions ----
+
   addAccount: (input) => {
     const account: Account = {
       _id: newId(),
@@ -390,8 +377,8 @@ export const useStore = create<AppState>()((set, get) => ({
     };
     set({ accounts: [...get().accounts, account] });
     if (isDesktop()) {
-      // The webview is not the database: persist through the backend, which
-      // upserts by number under the signed-in owner.
+
+
       void saveAccount(account);
     }
     return account;
@@ -421,10 +408,10 @@ export const useStore = create<AppState>()((set, get) => ({
         (lists.some((l) => l.id === state.activeListId) ? state.activeListId : (lists[0]?.id ?? '')),
     })),
 
-  // ---- auth actions ----
-  // In the desktop app the backend verifies the password and derives the key
-  // that protects the DOP password from it. The local hash stays as the browser
-  // fallback (`npm run dev` without Tauri), where there is no backend to ask.
+
+
+
+
   setupPassword: async (username, password) => {
     if (isDesktop()) {
       const res = await setupLogin(username.trim(), password);
@@ -459,7 +446,7 @@ export const useStore = create<AppState>()((set, get) => ({
             : [...get().owners, res.owner],
           ...clearWorkspaceCache(),
         });
-        // Put this owner's actual data on screen, not an empty shell.
+
         const fresh = await loadWorkspaceFromDb();
         if (fresh) {
           set({
@@ -509,12 +496,12 @@ export const useStore = create<AppState>()((set, get) => ({
     const status = await authStatus();
     const owners = status?.owners ?? [];
     const current = owners.find((o) => o.id === status?.current) ?? null;
-    // Prefer the workspace of the live session; otherwise the remembered one.
+
     const selected = current ?? rememberedOwner() ?? owners[0] ?? null;
     if (selected) rememberOwner(selected);
     set({
       authConfigured: status?.configured ?? false,
-      // The derived key lives only for a session, so a reload starts locked.
+
       loggedIn: status?.unlocked ?? false,
       owners,
       currentOwner: current,
@@ -524,7 +511,7 @@ export const useStore = create<AppState>()((set, get) => ({
   },
 }));
 
-// Persist every change back to localStorage (browser only).
+
 if (typeof localStorage !== 'undefined') {
   useStore.subscribe((state) => {
     try {
@@ -540,7 +527,7 @@ if (typeof localStorage !== 'undefined') {
         }),
       );
     } catch {
-      /* storage full / private mode — non-fatal */
+
     }
   });
 }

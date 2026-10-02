@@ -1,9 +1,3 @@
-/**
- * Manage panel (right drawer): the account-maintenance features from the
- * Python app — Add New Account, Delete Account, Change Password — plus Sign
- * out. Account mutations hit the live store and persist; the credential gate
- * is client-side (see `src/lib/auth.ts`).
- */
 import { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../lib/store';
 import { matchesQuery, denominationLabel } from '../lib/format';
@@ -200,7 +194,7 @@ function DesktopSection(): React.ReactElement {
       notify('Username and password are both required', 'error');
       return;
     }
-    // A mistyped password would silently break every run for 180 days.
+
     if (password !== confirm) {
       notify('The two passwords do not match', 'error');
       return;
@@ -244,10 +238,10 @@ function DesktopSection(): React.ReactElement {
               <KeyRound className="h-4 w-4" />Save DOP password
             </Button>
           </div>
-          {/* <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-            Stored encrypted with <code className="font-mono">FERNET_KEY</code> in this app&rsquo;s own
-            database on this machine, readable only by your user. Nothing is sent anywhere.
-          </p> */}
+          {
+
+
+}
           {outcome ? (
             <p className="mt-2 text-[11px] leading-relaxed text-emerald-700">
               Stored encrypted — saved in{' '}
@@ -263,7 +257,7 @@ function DesktopSection(): React.ReactElement {
             <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
               {info.scraper_kind === 'sidecar' ? (
                 <>
-                  Runner: <code className="font-mono">Built In</code> 
+                  Runner: <code className="font-mono">Built In</code>
                 </>
               ) : (
                 <>
@@ -292,10 +286,10 @@ function DesktopSection(): React.ReactElement {
   );
 }
 
-/**
- * Which build you are looking at — the answer to "did the install actually
- * replace the last one?".
- */
+
+
+
+
 function BuildSection(): React.ReactElement {
   const { ready, info } = useDesktop();
 
@@ -332,7 +326,7 @@ function BuildSection(): React.ReactElement {
   );
 }
 
-/** How the resolved `scraper.py` is described in the UI. */
+
 const SCRAPER_SOURCE_LABEL: Record<string, string> = {
   chosen: 'chosen here',
   env: 'AUTODOP_SCRAPER',
@@ -342,12 +336,12 @@ const SCRAPER_SOURCE_LABEL: Record<string, string> = {
   cwd: 'working directory',
 };
 
-/**
- * Where `scraper.py` comes from.
- *
- * Every build carries its own copy, so this section only matters when you want
- * to point the app at a different script — a modified one, say.
- */
+
+
+
+
+
+
 function ScraperSection(): React.ReactElement {
   const { ready } = useDesktop();
   const [location, setLocation] = useState<ScraperLocation | null>(null);
@@ -395,10 +389,10 @@ function ScraperSection(): React.ReactElement {
     <Section title="Scraper script">
       {ready ? (
         <>
-          {/* <p className="mb-2 text-xs leading-relaxed text-slate-500">
-            The runner that drives the DOP portal. Builds carry a self-contained copy, so there is
-            normally nothing to set here.
-          </p> */}
+          {
+
+
+}
           {location ? (
             <div className="mb-2 flex flex-col gap-1 rounded-lg bg-slate-50 px-2.5 py-2">
               <Pill tone={location.present ? 'positive' : 'neutral'}>
@@ -444,22 +438,22 @@ function ScraperSection(): React.ReactElement {
   );
 }
 
-/**
- * Backup / restore — a copy of the SQLite file, made with SQLite's own
- * backup API so WAL pages are not missed.
- *
- * The backup carries the encrypted DOP password and the login hash, and
- * neither is readable without the login password the key was derived from.
- * That is the caveat, said plainly: the backup is the file plus you
- * remembering the password.
- */
+
+
+
+
+
+
+
+
+
 function BackupSection(): React.ReactElement {
   const { ready } = useDesktop();
   const [exportPath, setExportPath] = useState('');
   const [importPath, setImportPath] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
-  // Portable JSON
+
   const [jsonPath, setJsonPath] = useState('');
   const [jsonImportPath, setJsonImportPath] = useState('');
   const [jsonPassword, setJsonPassword] = useState('');
@@ -562,12 +556,12 @@ function BackupSection(): React.ReactElement {
     <Section title="Backup & restore">
       {ready ? (
         <>
-          {/* <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
-            One SQLite file holds everything on this machine. The backup carries
-            the DOP password encrypted with your login password —
-            <strong> it only opens together with that password</strong>. On another
-            machine, sign in with the same password first.
-          </p> */}
+          {
+
+
+
+
+}
           <input
             aria-label="Backup destination path"
             value={exportPath}
@@ -613,19 +607,19 @@ function BackupSection(): React.ReactElement {
                 <Upload className="h-4 w-4" />Restore from backup
               </Button>
             )}
-            {/* <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-              A restore keeps the replaced database as
-              <code className="font-mono"> autodop.db.pre-restore-…</code> next to the live
-              file, and signs you out — sign back in with the password the backup expects.
-            </p> */}
+            {
+
+
+
+}
           </div>
           <div className="mt-3 border-t border-slate-100 pt-2">
             <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
-              <strong>Export Data as Portable JSON</strong> 
-              {/* — the same data in a human-readable file that
-              moves to any machine. The DOP password stays encrypted with
-              <strong> this app&rsquo;s login password</strong>: to import on a new machine,
-              set your login there to the same password, sign in, and import with it. */}
+              <strong>Export Data as Portable JSON</strong>
+              {
+
+
+}
             </p>
             <input
               aria-label="JSON backup destination path"
@@ -688,11 +682,11 @@ function BackupSection(): React.ReactElement {
   );
 }
 
-/**
- * First-run import: point at the agent portal's "Deposit Accounts" PDF
- * printout and every row in it becomes an account — number, name and
- * denomination; REF and CNumber stay empty.
- */
+
+
+
+
+
 function PdfImportSection(): React.ReactElement {
   const { ready } = useDesktop();
   const [path, setPath] = useState('');
@@ -748,12 +742,12 @@ function PdfImportSection(): React.ReactElement {
   );
 }
 
-/**
- * The local database — one SQLite file on this machine.
- *
- * Nothing is shared with anyone else, so there is no connection to check, no
- * role to grant, and no read-only caveat.
- */
+
+
+
+
+
+
 function DatabaseSection(): React.ReactElement {
   const { ready } = useDesktop();
   const shown = useStore((s) => s.accounts.length);
@@ -802,9 +796,9 @@ function DatabaseSection(): React.ReactElement {
       notify(res.error ?? 'Saving lists failed', 'error');
       return;
     }
-    // Adopt the stored ids so the next save updates instead of duplicating.
-    // Ids can change (a list is matched by name when it has no id yet), so
-    // follow the active list across by name rather than by id.
+
+
+
     const activeName = store.lists.find((list) => list.id === store.activeListId)?.name;
     const activeId = res.lists.find((list) => list.name === activeName)?.id;
     useStore.getState().setLists(res.lists, activeId);
@@ -864,12 +858,12 @@ function DatabaseSection(): React.ReactElement {
   );
 }
 
-/**
- * Where Generate will get its DOP credentials from.
- *
- * Reports the source and the portal id only — the password lives in the Rust
- * backend and is handed straight to `scraper.py`.
- */
+
+
+
+
+
+
 function CredentialSourceNote(): React.ReactElement {
   const [status, setStatus] = useState<DopCredentialStatus | null>(null);
 

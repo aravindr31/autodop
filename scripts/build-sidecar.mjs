@@ -1,14 +1,14 @@
 #!/usr/bin/env node
-/**
- * Freeze `scraper.py` into one executable and put it where Tauri bundles it, so
- * a shipped app needs no Python, no pip and no selenium on the target machine.
- *
- *   npm run build:sidecar
- *
- * PyInstaller cannot cross-compile: run this on each OS you ship, on the
- * architecture you are targeting. The filename mirrors `sidecar_name()` in
- * src-tauri/src/lib.rs — keep the two in step.
- */
+
+
+
+
+
+
+
+
+
+
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, chmodSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -26,7 +26,7 @@ const output = join(binariesDir, `${name}${suffix}`);
 const distDir = join(root, '.sidecar-build', 'dist');
 const workDir = join(root, '.sidecar-build', 'work');
 
-/** Interpreters to try, most specific first. */
+
 function interpreters() {
   return [
     process.env.AUTODOP_PYTHON,
@@ -54,8 +54,8 @@ if (!python) {
 
 console.log(`Freezing scraper.py for ${OS}-${ARCH} with ${python}`);
 
-// selenium pulls in submodules lazily; collect them explicitly or the frozen
-// binary fails at import time.
+
+
 try {
   execFileSync(python, ['-m', 'PyInstaller', '--version'], { stdio: 'ignore' });
 } catch {

@@ -23,6 +23,8 @@ export default function AuthScreen(): React.ReactElement {
   const selected = useStore((s) => s.selectedOwner);
   const owners = useStore((s) => s.owners);
   const [choosing, setChoosing] = useState(false);
+  /** Setup form shown on a machine that already has workspaces. */
+  const [adding, setAdding] = useState(false);
   const [username, setUsername] = useState('');
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
@@ -34,11 +36,14 @@ export default function AuthScreen(): React.ReactElement {
     if (busy) return;
     setBusy(true);
     try {
-      if (needsSetup) {
+      if (needsSetup || adding) {
         if (!username.trim()) setErr('Enter your DOP portal id (your mobile number).');
         else if (pw.length < 1) setErr('Choose a password to continue.');
         else if (pw !== pw2) setErr('Passwords do not match.');
-        else await store.setupPassword(username, pw);
+        else {
+          await store.setupPassword(username, pw);
+          setAdding(false);
+        }
       } else {
         const target = selected ?? owners[0];
         if (!target) {
@@ -71,7 +76,7 @@ export default function AuthScreen(): React.ReactElement {
       </div>
       <h1 className="text-xl font-semibold text-slate-800">AutoDOP</h1>
       <p className="text-sm text-slate-500">
-        {needsSetup
+        {needsSetup || adding
           ? 'Create your workspace — DOP portal id and a password.'
           : selected
             ? `Welcome back, ${selected.username}.`
@@ -84,7 +89,7 @@ export default function AuthScreen(): React.ReactElement {
           void submit();
         }}
       >
-        {needsSetup && (
+        {(needsSetup || adding) && (
           <>
             <label className="block text-xs font-medium text-slate-500">
               DOP portal id (mobile number)
@@ -119,7 +124,7 @@ export default function AuthScreen(): React.ReactElement {
           onChange={(e) => setPw(e.currentTarget.value)}
           placeholder="Password"
         />
-        {needsSetup && (
+        {(needsSetup || adding) && (
           <>
             <label className="mt-3 block text-xs font-medium text-slate-500">Confirm password</label>
             <input
@@ -133,7 +138,7 @@ export default function AuthScreen(): React.ReactElement {
         )}
         {err ? <p className="mt-3 text-xs font-medium text-rose-600">{err}</p> : null}
         <Button type="submit" variant="primary" className="!mt-4 !w-full" disabled={busy}>
-          {needsSetup ? (
+          {needsSetup || adding ? (
             <>
               <UserPlus className="mx-1 h-4 w-4" />Create workspace
             </>
@@ -144,7 +149,20 @@ export default function AuthScreen(): React.ReactElement {
           )}
         </Button>
 
-        {!needsSetup && choosing && (
+        {adding && (
+          <button
+            type="button"
+            className="mt-2 text-[11px] text-slate-400 hover:text-slate-600"
+            onClick={() => {
+              setAdding(false);
+              setErr('');
+            }}
+          >
+            Back to sign in
+          </button>
+        )}
+
+        {!needsSetup && !adding && choosing && (
           <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
             <p className="mb-2 flex items-center gap-1 text-[11px] font-semibold text-slate-600">
               <Users className="h-3.5 w-3.5" />Workspaces on this machine
@@ -172,10 +190,23 @@ export default function AuthScreen(): React.ReactElement {
                 <li className="text-[11px] text-slate-400">No other workspace yet.</li>
               )}
             </ul>
+            <button
+              type="button"
+              className="mt-1 w-full rounded-lg border border-dashed border-slate-300 px-2.5 py-1.5 text-left text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+              onClick={() => {
+                setAdding(true);
+                setUsername('');
+                setPw('');
+                setPw2('');
+                setErr('');
+                setChoosing(false);
+              }}
+            >
+              + Add a new workspace
+            </button>
             <p className="mt-2 text-[11px] leading-snug text-slate-400">
-              Someone else can add their workspace here: they sign in with their
-              own id and password, then import their backup — their data stays
-              separate from yours.
+              Each workspace is separate: sign in with your own id, import your
+              backup, and your data never mixes with anyone else's.
             </p>
           </div>
         )}

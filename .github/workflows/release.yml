@@ -1,21 +1,60 @@
 name: release
 
 # Build AutoDOP for macOS, Windows and Linux and attach the installers to a
-# GitHub release. PyInstaller cannot cross-compile and Tauri bundles per-OS,
-# so every target builds on its own runner.
+# GitHub release. Triggered when work lands on `main` — i.e. when a PR is
+# merged — and gated behind the full test suite. PyInstaller cannot
+# cross-compile and Tauri bundles per-OS, so every target builds on its own
+# runner. The release version comes from `src-tauri/tauri.conf.json`: bump it
+# (`npm run version:bump -- X.Y.Z`) in the PR you merge.
 #
-#   git tag v0.6.1 && git push --tags   → binaries appear on the release page
+# Also runnable by hand from the Actions tab (workflow_dispatch).
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rust formatting
+        run: cd src-tauri && cargo fmt --check
+
+      - name: Rust tests
+        run: cd src-tauri && cargo test --lib
+
+      - name: Frontend type check
+        run: cd frontend && npx astro check
+
+      - name: Store smoke test
+        run: cd frontend && npm run smoke
+
   build:
+    needs: test # never ship a version the suite has not passed on
     strategy:
       fail-fast: false
       matrix:
@@ -80,9 +119,20 @@ jobs:
           name: autodop-${{ runner.os }}
           path: dist/*
 
+      # The release is named after the version in tauri.conf.json — one
+      # merged PR per version. A re-run updates the same release.
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           files: dist/*
           generate_release_notes: true

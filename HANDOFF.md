@@ -11,7 +11,7 @@ portal** through Selenium: it keeps account holders, groups them into lists
 - Repo: `/Users/aravind/repos/AutoDOP`, branch `feat/astro-frontend-spec`
 - Stack: Astro + React + Tailwind frontend, **Tauri v2** desktop shell, **Rust**
   backend, one **SQLite** file per install
-- Current version: **0.4.0** · latest commit `d34651d`
+- Current version: **0.5.0** · latest commit `9213a39`
 - `main.py`, `scraper.py` are the original app and are **left untouched**
 
 ## Where things stand
@@ -106,6 +106,25 @@ Not proven:
   installments — try a one-account list first.
 - The GUI flows are not driven by tests: they are verified by the Rust/TS
   contract plus one real use of the import.
+
+## Local multi-account (done)
+
+**Workspaces.** A `owners` table keys each person by their DOP portal id (a
+mobile number); `accounts`, `lists`, `runs` carry `owner_id`, and
+`credentials` is owner-keyed. Schema version 2: an existing single-user v1
+database migrates in one transaction under a synthetic `default` owner named
+after the saved portal id, with its `login_hash`/`kdf_salt` moved out of
+`meta` into the owner row. The migration was verified against a copy of the
+live store (148 accounts, 26 lists, credential, argon2 hash carried over).
+
+**Auth.** `setup_login` takes username + password and creates the owner;
+`login` takes `owner_id` + password and derives that owner's key. The
+frontend remembers the last owner id in localStorage (`autodop-last-owner`)
+so the login screen asks only for the password, with a "Not you?" switcher
+listing the other workspaces. A second person: pick/add a workspace, sign in
+with their own password, import their portable JSON backup — data lands in
+their space, isolated from yours. Password change re-keys one owner.
+`counts(owner)` is scoped; `counts_all()` is what a whole-file backup holds.
 
 ## Open work
 

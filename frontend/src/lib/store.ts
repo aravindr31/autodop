@@ -487,9 +487,7 @@ export const useStore = create<AppState>()((set, get) => ({
 
   logout: () => {
     if (isDesktop()) void logoutDesktop();
-    // The next sign-in may be a different person; never leave this one's
-    // rows on screen or in the cache.
-    set({ loggedIn: false, currentOwner: null, ...clearWorkspaceCache() });
+    set({ loggedIn: false, currentOwner: null });
   },
 
   changePassword: async (oldPassword, newPassword) => {

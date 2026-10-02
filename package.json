@@ -1,7 +1,7 @@
 {
   "name": "autodop-desktop",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "AutoDOP desktop shell (Tauri) — wraps the Astro frontend and invokes scraper.py",
   "scripts": {
     "dev": "tauri dev",

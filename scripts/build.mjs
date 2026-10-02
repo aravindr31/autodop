@@ -24,27 +24,41 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tauri = existsSync(join(root, 'node_modules', '.bin', 'tauri'))
   ? join(root, 'node_modules', '.bin', 'tauri')
   : 'npx';
+// Windows shells resolve `.bin/tauri` to the `.cmd` shim; execFileSync needs
+// the exact file.
+const tauriCmd = process.platform === 'win32' && existsSync(`${tauri}.cmd`) ? `${tauri}.cmd` : tauri;
 
 const run = (cmd, args, options = {}) =>
   execFileSync(cmd, args, { stdio: 'inherit', cwd: root, ...options });
 
-// 1. the app bundle, without Tauri's DMG step
-run(tauri, tauri === 'npx' ? ['tauri', 'build', '--bundles', 'app'] : ['build', '--bundles', 'app']);
+// Bundle types differ by platform: `app` is the macOS-only bundle the DMG
+// step below builds on; Windows and Linux let Tauri pick (NSIS/MSI, AppImage,
+// deb) — passing `--bundles app` there would fail outright.
+const isMac = process.platform === 'darwin';
+run(
+  tauriCmd,
+  tauriCmd === 'npx'
+    ? ['tauri', 'build', ...(isMac ? ['--bundles', 'app'] : [])]
+    : ['build', ...(isMac ? ['--bundles', 'app'] : [])],
+);
 
 const config = JSON.parse(readFileSync(join(root, 'src-tauri', 'tauri.conf.json'), 'utf8'));
 const product = config.productName;
 const version = config.version;
+
+// On other platforms Tauri's own bundler is fine — .msi/.exe (NSIS) on
+// Windows, .AppImage/.deb on Linux.
+if (!isMac) {
+  const dir = join(root, 'src-tauri', 'target', 'release', 'bundle');
+  console.log(`\n${process.platform}: Tauri packaging complete — see ${dir}`);
+  process.exit(0);
+}
+
 const srcApp = join(root, 'src-tauri', 'target', 'release', 'bundle', 'macos', `${product}.app`);
 
 if (!existsSync(srcApp)) {
   console.error(`No app bundle at ${srcApp}`);
   process.exit(1);
-}
-
-// On other platforms Tauri's own bundler is fine — .msi/.deb/.AppImage.
-if (process.platform !== 'darwin') {
-  console.log(`\n${process.platform}: leaving packaging to Tauri (${srcApp} built).`);
-  process.exit(0);
 }
 
 // 2. stage a clean copy well away from any bundle directory

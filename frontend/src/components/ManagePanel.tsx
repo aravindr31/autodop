@@ -23,9 +23,10 @@ import {
   importBackup,
   exportPortableBackup,
   importPortableBackup,
+  importAccountsPdf,
 } from '../lib/bridge';
 import type { LocalStatus, DopCredentialStatus, SavedCredentials, ScraperLocation } from '../lib/bridge';
-import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database, Save, Upload } from 'lucide-react';
+import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database, Save, Upload, FileText } from 'lucide-react';
 import { Button, Pill } from './ui';
 
 const FIELD =
@@ -688,6 +689,66 @@ function BackupSection(): React.ReactElement {
 }
 
 /**
+ * First-run import: point at the agent portal's "Deposit Accounts" PDF
+ * printout and every row in it becomes an account — number, name and
+ * denomination; REF and CNumber stay empty.
+ */
+function PdfImportSection(): React.ReactElement {
+  const { ready } = useDesktop();
+  const [path, setPath] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    if (!path.trim()) {
+      notify('Enter the full path to the PDF', 'error');
+      return;
+    }
+    setBusy(true);
+    const res = await importAccountsPdf(path.trim());
+    setBusy(false);
+    if (!res.ok || !res.report) {
+      notify(res.error ?? 'Import failed', 'error');
+      return;
+    }
+    const { imported, skipped_duplicates } = res.report;
+    notify(
+      `Imported ${imported} account(s)` +
+        (skipped_duplicates > 0 ? `, skipped ${skipped_duplicates} already present` : ''),
+      'success',
+    );
+    setPath('');
+    const accounts = await loadAccountsFromDb();
+    if (accounts.ok && accounts.accounts) useStore.getState().setAccounts(accounts.accounts);
+  };
+
+  return (
+    <Section title="Import from PDF">
+      {ready ? (
+        <>
+          <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+            Print the agent portal&rsquo;s <strong>Deposit Accounts</strong> list to PDF, then
+            point here. Every row becomes an account — number, name and denomination; the
+            reference and customer numbers stay empty.
+          </p>
+          <input
+            aria-label="Path to the Deposit Accounts PDF"
+            value={path}
+            onChange={(e) => setPath(e.currentTarget.value)}
+            className={FIELD}
+            placeholder="/Users/you/Downloads/Department of Post Agent Login Deposit Accounts.pdf"
+          />
+          <Button variant="secondary" className="!mt-2 !w-full" disabled={busy} onClick={() => void run()}>
+            <FileText className="h-4 w-4" />Import from PDF
+          </Button>
+        </>
+      ) : (
+        <p className="text-xs text-slate-500">Available in the desktop app only.</p>
+      )}
+    </Section>
+  );
+}
+
+/**
  * The local database — one SQLite file on this machine.
  *
  * Nothing is shared with anyone else, so there is no connection to check, no
@@ -873,6 +934,7 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
           <DeleteAccountSection />
           <ChangePasswordSection />
           <DatabaseSection />
+          <PdfImportSection />
           <BackupSection />
           <DesktopSection />
           <ScraperSection />

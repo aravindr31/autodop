@@ -1247,6 +1247,157 @@ fn save_lists(app: AppHandle, lists: Vec<db::InputList>) -> Result<Vec<db::DbLis
     open_store(&app)?.save_lists(&current_owner(&app)?, &lists)
 }
 
+/// What the PDF import moved across, so the UI can say what happened.
+#[derive(Debug, Serialize)]
+pub struct PdfImportReport {
+    /// Rows that became accounts.
+    pub imported: usize,
+    /// Rows whose account number already exists for this owner.
+    pub skipped_duplicates: usize,
+    /// Lines that looked like data but did not parse.
+    pub unparsed: usize,
+}
+
+/// First-run import: pull accounts out of the agent portal's
+/// "Deposit Accounts" PDF printout (Select | Account No | Account Name |
+/// Denomination | Month Paid Upto | Next Due Date). Only the number, the
+/// name and the denomination are taken; REF and CNumber stay empty.
+#[tauri::command]
+fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, String> {
+    let source = expand_home(&path);
+    if !source.is_file() {
+        return Err(format!("{} is not a file", source.display()));
+    }
+
+    // Extract the plain text the way a browser print does: one row per line,
+    // columns separated by spaces or the table's rule lines.
+    let text = pdf_extract::extract_text(&source.display().to_string())
+        .map_err(|error| format!("could not read the PDF: {error}"))?;
+
+    let owner = current_owner(&app)?;
+    let store = open_store(&app)?;
+
+    let mut imported = 0usize;
+    let mut skipped_duplicates = 0usize;
+    let mut unparsed = 0usize;
+    // Long holder names wrap across two extracted lines: the number and the
+    // first half of the name on one line (no amount), the rest plus the
+    // amount on the next. Carry the previous line forward until the row
+    // completes.
+    let mut carry = String::new();
+    for line in text.lines() {
+        let combined = if carry.is_empty() {
+            line.to_string()
+        } else {
+            format!("{carry} {line}")
+        };
+        let looks_like_data = line
+            .split_whitespace()
+            .any(|token| token.len() >= 9 && token.chars().all(|c| c.is_ascii_digit()));
+        match parse_deposit_row(&combined) {
+            Ok(Some((number, name, denomination))) => {
+                carry.clear();
+                let row = json!({
+                    "Number": number,
+                    "Name": name,
+                    "Denomination": denomination,
+                    "CNumber": "",
+                    "Ref_Number": "",
+                    "addedIn": "",
+                });
+                match store.add_account(&owner, &row) {
+                    Ok(_) => imported += 1,
+                    Err(error) if error.contains("already exists") => skipped_duplicates += 1,
+                    Err(other) => return Err(other),
+                }
+            }
+            Ok(None) => {
+                // A data-ish line without an amount is half a row; headers and
+                // footers carry no account number and are dropped.
+                carry = if looks_like_data && !line.contains("Cr.") {
+                    combined
+                } else {
+                    String::new()
+                };
+            }
+            Err(_) => {
+                carry.clear();
+                unparsed += 1;
+            }
+        }
+    }
+
+    if imported + skipped_duplicates == 0 {
+        return Err(
+            "No deposit-account rows were found in that PDF — is it the agent \
+             portal's \"Deposit Accounts\" printout?"
+                .into(),
+        );
+    }
+    Ok(PdfImportReport {
+        imported,
+        skipped_duplicates,
+        unparsed,
+    })
+}
+
+/// Parse one line of the printout into (number, name, denomination).
+///
+/// A row is: an index number, a 10-12 digit account number, the holder name,
+/// a `1,500.00 Cr.`-shaped denomination, the month paid upto, and a date that
+/// may be missing. Anything else on the page (headers, footers) has no
+/// denomination-shaped token and yields `Ok(None)`; a line that has the
+/// amount shape but no account number is malformed and yields `Err(())`.
+pub fn parse_deposit_row(line: &str) -> Result<Option<(String, String, String)>, &'static str> {
+    // A denomination always looks like `1,500.00` or `500.00`.
+    let is_amount = |token: &str| -> bool {
+        let Some((whole, fraction)) = token.split_once('.') else {
+            return false;
+        };
+        fraction.len() == 2
+            && fraction.chars().all(|c| c.is_ascii_digit())
+            && !whole.is_empty()
+            && whole.chars().all(|c| c.is_ascii_digit() || c == ',')
+    };
+
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    // Find the denomination token; everything before it (minus the "Cr.") is
+    // index + number + name.
+    let mut amount_at = None;
+    for (index, token) in tokens.iter().enumerate() {
+        if is_amount(token)
+            && tokens
+                .get(index + 1)
+                .is_some_and(|next| next.starts_with("Cr"))
+        {
+            amount_at = Some(index);
+            break;
+        }
+    }
+    let Some(amount_at) = amount_at else {
+        return Ok(None);
+    };
+
+    let before = &tokens[..amount_at];
+    // The last purely numeric token before the amount is the account number;
+    // the leading 1-3 digit "Select" index (if any) is dropped.
+    let number_at = before
+        .iter()
+        .rposition(|token| {
+            !token.is_empty() && token.chars().all(|c| c.is_ascii_digit()) && token.len() >= 9
+        })
+        .ok_or("no account number on the line")?;
+    let number = tokens[number_at].to_string();
+    let name = before[number_at + 1..].join(" ");
+    if name.is_empty() {
+        return Err("no holder name on the line");
+    }
+    // `1,500.00` -> `1500.00`; the store keeps denominations as strings and
+    // the legacy data held them without commas.
+    let denomination: String = tokens[amount_at].replace(',', "");
+    Ok(Some((number, name, denomination)))
+}
+
 /// Insert or update one account for the signed-in owner.
 #[tauri::command]
 fn save_account(app: AppHandle, account: Value) -> Result<String, String> {
@@ -1551,6 +1702,7 @@ pub fn run() {
             save_lists,
             save_account,
             delete_account,
+            import_accounts_pdf,
             export_backup,
             import_backup,
             export_portable_backup,
@@ -1703,6 +1855,40 @@ mod tests {
     fn shortens_the_build_time_to_minutes() {
         assert_eq!(iso_minute(1_758_468_000), "2025-09-21T15:20Z");
         assert_eq!(iso_minute(0), "1970-01-01T00:00Z");
+    }
+
+    #[test]
+    fn parses_a_deposit_row_from_the_printout() {
+        let (number, name, denomination) =
+            parse_deposit_row("3 020001994152 REMYA C V 1,500.00 Cr. 22 23-Nov-2022")
+                .expect("parses")
+                .expect("a row");
+        assert_eq!(number, "020001994152");
+        assert_eq!(name, "REMYA C V");
+        assert_eq!(denomination, "1500.00");
+    }
+
+    #[test]
+    fn a_wrapped_name_and_a_missing_date_both_parse() {
+        // The continuation line alone has the amount but no account number.
+        let (number, name, _) = parse_deposit_row("62 3827124362 KAVITHA G NAIR 1,500.00 Cr. 60")
+            .expect("parses")
+            .expect("a row");
+        assert_eq!(number, "3827124362");
+        assert_eq!(name, "KAVITHA G NAIR");
+    }
+
+    #[test]
+    fn headers_and_footers_are_not_rows() {
+        for line in [
+            "DEPOSIT ACCOUNTS",
+            "Select Mode: Account Id(s): Deposit Accounts List",
+            "Select Account No Account Name Denomination Month Paid Upto Next RD Installment Due Date",
+            "1 of 5 11/10/22, 02:07",
+            "Printed on 09-Nov-2022 15:06:32 PM",
+        ] {
+            assert_eq!(parse_deposit_row(line).unwrap(), None, "{line}");
+        }
     }
 
     #[test]

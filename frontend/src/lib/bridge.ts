@@ -274,6 +274,31 @@ export async function deleteAccount(
   }
 }
 
+/** What the first-run PDF import moved across. */
+export interface PdfImportReport {
+  imported: number;
+  skipped_duplicates: number;
+  unparsed: number;
+}
+
+/**
+ * First-run import: read the agent portal's "Deposit Accounts" PDF printout
+ * and add its rows (number, name, denomination) as accounts.
+ */
+export async function importAccountsPdf(
+  path: string,
+): Promise<{ ok: boolean; error?: string; report?: PdfImportReport }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return {
+      ok: true,
+      report: await invoke<PdfImportReport>('import_accounts_pdf', { path }),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Forget the derived key. */
 export async function logoutDesktop(): Promise<void> {
   if (!isDesktop()) return;

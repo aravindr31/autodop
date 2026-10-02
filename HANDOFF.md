@@ -11,7 +11,7 @@ portal** through Selenium: it keeps account holders, groups them into lists
 - Repo: `/Users/aravind/repos/AutoDOP`, branch `feat/astro-frontend-spec`
 - Stack: Astro + React + Tailwind frontend, **Tauri v2** desktop shell, **Rust**
   backend, one **SQLite** file per install
-- Current version: **0.5.0** · latest commit `9213a39`
+- Current version: **0.6.0** · latest commit (see `git log -1`)
 - `main.py`, `scraper.py` are the original app and are **left untouched**
 
 ## Where things stand
@@ -125,6 +125,17 @@ listing the other workspaces. A second person: pick/add a workspace, sign in
 with their own password, import their portable JSON backup — data lands in
 their space, isolated from yours. Password change re-keys one owner.
 `counts(owner)` is scoped; `counts_all()` is what a whole-file backup holds.
+
+## PDF import (first-run import, done)
+
+`Manage → Import from PDF` (`import_accounts_pdf` + `parse_deposit_row` in
+`lib.rs`, `pdf-extract` crate). Point at the agent portal's **Deposit
+Accounts** PDF printout; every row becomes an account — number, name,
+denomination (commas stripped, `1500.00`), REF/CNumber empty. Long holder
+names wrap across two extracted lines; the parser carries the previous line
+forward until the row completes. Duplicates under the owner are skipped and
+reported. Verified against a real 160-row PDF: 160/160 parsed, no
+unparsed lines. Probe: `cargo run --example pdf_probe -- /path/to.pdf`.
 
 ## Open work
 

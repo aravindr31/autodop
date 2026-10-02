@@ -1230,7 +1230,7 @@ fn export_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
     let live = store_path(&app)?;
-    let snapshot = backup::export(&live, &destination)?;
+    let snapshot = backup::export(&live, &destination).map_err(fs_hint)?;
     Ok(BackupOutcome {
         accounts: snapshot.accounts,
         lists: snapshot.lists,
@@ -1252,7 +1252,7 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     if !source.exists() {
         return Err(format!("{} does not exist", source.display()));
     }
-    let snapshot = backup::inspect(&source)?;
+    let snapshot = backup::inspect(&source).map_err(fs_hint)?;
     let live = store_path(&app)?;
 
     // Safety copy of what is being replaced, before anything is touched.
@@ -1268,7 +1268,7 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
         let _ = std::fs::remove_file(live.with_extension(format!("db{sidecar}")));
     }
     std::fs::copy(&source, &live)
-        .map_err(|error| format!("cannot restore over {}: {error}", live.display()))?;
+        .map_err(|error| fs_hint(format!("cannot restore over {}: {error}", live.display())))?;
     for sidecar in ["-wal", "-shm"] {
         let _ = std::fs::remove_file(live.with_extension(format!("db{sidecar}")));
     }
@@ -1294,6 +1294,19 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
         has_credentials: snapshot.has_credentials,
         previous: Some(previous),
     })
+}
+
+/// Touch up file errors so the common self-inflicted one explains itself:
+/// an app running straight from the mounted installer DMG is read-only to
+/// macOS, and every write — including to ~/Downloads — fails with os error 30.
+fn fs_hint(error: String) -> String {
+    if error.contains("read-only file system") || error.contains("os error 30") {
+        return format!(
+            "{error} — AutoDOP is running from the installer DMG (read-only). \
+             Drag the app to Applications (or anywhere on disk) and run it from there."
+        );
+    }
+    error
 }
 
 /// Write a portable JSON backup of the live database to `path`.
@@ -1328,7 +1341,8 @@ fn export_portable_backup(app: AppHandle, path: String) -> Result<BackupOutcome,
         _ => None,
     };
     let written =
-        backup::portable_export(&store, &destination, &rfc3339_utc(now_secs()), credentials)?;
+        backup::portable_export(&store, &destination, &rfc3339_utc(now_secs()), credentials)
+            .map_err(fs_hint)?;
     Ok(BackupOutcome {
         accounts: written.accounts.len() as i64,
         lists: written.lists.len() as i64,
@@ -1355,7 +1369,7 @@ fn import_portable_backup(
 
     let live = store_path(&app)?;
     let safety = live.with_extension(format!("db.pre-restore-{}", compact_timestamp(now_secs())));
-    backup::export(&live, &safety)?;
+    backup::export(&live, &safety).map_err(fs_hint)?;
 
     let store = open_store(&app)?;
     let (accounts, lists, entries) = backup::portable_import(&store, &backup)?;

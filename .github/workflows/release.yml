@@ -53,6 +53,26 @@ jobs:
       - name: Store smoke test
         run: cd frontend && npm run smoke
 
+      # A merge must carry a version bump: refuse to release anything that
+      # already exists, and refuse a tauri.conf.json that disagrees with the
+      # package.json files `version:bump` keeps in step.
+      - name: Guard — version must be new and consistent
+        shell: bash
+        run: |
+          VERSION=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION is already released — bump the version (npm run version:bump -- X.Y.Z) in this PR."
+            exit 1
+          fi
+          for file in package.json frontend/package.json src-tauri/Cargo.toml; do
+            if ! grep -q ""$VERSION"" "$file" && ! grep -q "^version = "$VERSION"" "$file"; then
+              echo "::error::$file does not carry $VERSION — run npm run version:bump -- $VERSION."
+              exit 1
+            fi
+          done
+          echo "version $VERSION is new and consistent"
+
   build:
     needs: test # never ship a version the suite has not passed on
     strategy:

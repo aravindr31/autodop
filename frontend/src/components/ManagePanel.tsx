@@ -159,7 +159,7 @@ function ChangePasswordSection(): React.ReactElement {
   };
 
   return (
-    <Section title="Change Password">
+    <Section title="Change Local Password">
       <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
         This is the password that unlocks the app, and the one the stored DOP
         password is encrypted with. Changing it re-encrypts that for you.

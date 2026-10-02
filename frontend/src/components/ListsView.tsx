@@ -414,19 +414,6 @@ export default function ListsView(): React.ReactElement {
 
   return (
     <section className="flex flex-col gap-4">
-      {/* <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Backend</span>
-        <div className="relative min-w-0 flex-1">
-          <input
-            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-3 pr-2 text-sm font-mono text-slate-600 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-2 focus:outline-offset-0 focus:outline-indigo-200"
-            placeholder="https://api.example.com/submit (optional)"
-            value={endpointInput}
-            onChange={(e) => setEndpointInput(e.currentTarget.value)}
-          />
-        </div>
-        <Button variant="secondary" size="sm" onClick={saveEndpoint}>Save</Button>
-      </div> */}
-
       { }
       {populated.length > 0 ? <GenerateAllButton lists={populated} /> : null}
       {populated.length > 0 ? <ClearAllButton lists={populated} /> : null}

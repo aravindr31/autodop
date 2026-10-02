@@ -2,7 +2,8 @@ name: release
 
 on:
   push:
-    branches: [ main ]
+    branches:
+    - main
     paths-ignore:
     - 'README.md'
     - 'CHANGELOG.md'

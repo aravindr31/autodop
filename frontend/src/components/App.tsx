@@ -58,6 +58,12 @@ export default function App(): React.ReactElement {
     [],
   );
 
+  // Ask the backend (desktop) or local storage (browser) whether a login
+  // password is set, before showing the wrong prompt.
+  useEffect(() => {
+    void useStore.getState().refreshAuth();
+  }, []);
+
   // In the desktop app, source accounts from the local database once it has
   // any; until then the persisted/seeded accounts stay in place, so a fresh
   // install is not an empty screen.

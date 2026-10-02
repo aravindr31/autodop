@@ -23,6 +23,9 @@
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use argon2::password_hash::phc::PasswordHash;
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
+use argon2::Argon2;
 use base64::Engine as _;
 use hmac::digest::KeyInit as _; // brings `new_from_slice`; aliased to avoid the cipher `KeyInit`
 use hmac::{Hmac, Mac};
@@ -70,6 +73,70 @@ pub fn generate_key() -> Result<String, String> {
     let mut bytes = [0u8; KEY_LEN];
     getrandom::getrandom(&mut bytes).map_err(|error| format!("no system randomness: {error}"))?;
     Ok(b64().encode(&bytes))
+}
+
+// --------------------------------------------------------------------------- //
+// key derivation from the login password                                      //
+// --------------------------------------------------------------------------- //
+
+/// Bytes of salt for the key-derivation function.
+pub const SALT_LEN: usize = 16;
+
+/// A fresh salt, base64url, for [`derive_key`].
+pub fn new_salt() -> Result<String, String> {
+    let mut bytes = [0u8; SALT_LEN];
+    getrandom::getrandom(&mut bytes).map_err(|error| format!("no system randomness: {error}"))?;
+    Ok(b64().encode(&bytes))
+}
+
+/// Derive the Fernet key that protects the DOP password from the login password.
+///
+/// Argon2id, deliberately — **not** a bare SHA-256. A fast digest would make the
+/// stored credential open to offline guessing at billions of attempts a second,
+/// which is the one attack this is meant to stop: someone who copies the
+/// database file. Argon2id is memory-hard and tunable, so the same password
+/// costs an attacker a great deal more per guess.
+///
+/// Returns a normal Fernet key string, so the verified encrypt/decrypt above
+/// work on it unchanged.
+pub fn derive_key(password: &str, salt_b64: &str) -> Result<String, String> {
+    let salt = b64()
+        .decode(salt_b64.trim())
+        .map_err(|error| format!("salt is not valid base64url: {error}"))?;
+    if salt.len() < 8 {
+        return Err(format!("salt must be at least 8 bytes, got {}", salt.len()));
+    }
+
+    let mut key = [0u8; KEY_LEN];
+    Argon2::default()
+        .hash_password_into(password.as_bytes(), &salt, &mut key)
+        .map_err(|error| format!("key derivation failed: {error}"))?;
+    Ok(b64().encode(&key))
+}
+
+/// Argon2id hash of the login password, as a PHC string, for verification.
+///
+/// The salt lives inside the returned string, so nothing else needs storing.
+pub fn hash_login(password: &str) -> Result<String, String> {
+    let mut salt_bytes = [0u8; SALT_LEN];
+    getrandom::getrandom(&mut salt_bytes)
+        .map_err(|error| format!("no system randomness: {error}"))?;
+    // `hash_password_with_salt` rather than `hash_password`: the salt is ours,
+    // and the returned PHC string carries it so nothing else needs storing.
+    Argon2::default()
+        .hash_password_with_salt(password.as_bytes(), &salt_bytes)
+        .map(|hash| hash.to_string())
+        .map_err(|error| format!("hashing the login password failed: {error}"))
+}
+
+/// Constant-time-ish check of a login password against a stored PHC string.
+pub fn verify_login(password: &str, phc: &str) -> bool {
+    match PasswordHash::new(phc) {
+        Ok(parsed) => Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Encrypt `plaintext` into a Fernet token, stamped with the current time.
@@ -260,6 +327,82 @@ mod tests {
         let wrong_len = b64().encode([0u8; KEY_LEN - 1]);
         assert!(encrypt(&wrong_len, "x").is_err(), "short key");
         assert!(encrypt_at(TEST_KEY, "x", 0, &[0u8; 8]).is_err(), "short iv");
+    }
+
+    #[test]
+    fn derives_a_usable_fernet_key_from_a_password() {
+        let salt = new_salt().unwrap();
+        let key = derive_key("hunter2", &salt).unwrap();
+
+        // It has to be a real Fernet key or nothing downstream works.
+        assert_eq!(key.len(), 44, "got {key}");
+        assert_eq!(parse_key(&key).unwrap().len(), KEY_LEN);
+
+        let token = encrypt(&key, "the DOP password").unwrap();
+        assert_eq!(decrypt(&key, &token).unwrap(), "the DOP password");
+    }
+
+    #[test]
+    fn the_same_password_and_salt_derive_the_same_key() {
+        let salt = new_salt().unwrap();
+        assert_eq!(
+            derive_key("pw", &salt).unwrap(),
+            derive_key("pw", &salt).unwrap(),
+            "derivation must be deterministic"
+        );
+    }
+
+    #[test]
+    fn a_different_password_or_salt_derives_a_different_key() {
+        let salt = new_salt().unwrap();
+        let other_salt = new_salt().unwrap();
+        let base = derive_key("pw", &salt).unwrap();
+        assert_ne!(
+            base,
+            derive_key("pw", &other_salt).unwrap(),
+            "salt must matter"
+        );
+        assert_ne!(
+            base,
+            derive_key("pw2", &salt).unwrap(),
+            "password must matter"
+        );
+    }
+
+    #[test]
+    fn refuses_a_bad_salt() {
+        assert!(derive_key("pw", "not base64!").is_err());
+        assert!(
+            derive_key("pw", &b64().encode([0u8; 4])).is_err(),
+            "too short"
+        );
+    }
+
+    #[test]
+    fn hashes_and_verifies_a_login_password() {
+        let phc = hash_login("correct horse").unwrap();
+        assert!(phc.starts_with("$argon2id$"), "got {phc}");
+        assert!(verify_login("correct horse", &phc));
+        assert!(!verify_login("wrong", &phc));
+        assert!(!verify_login("correct horse", "not-a-phc-string"));
+        // A fresh salt each time, so two hashes of one password differ.
+        assert_ne!(phc, hash_login("correct horse").unwrap());
+    }
+
+    #[test]
+    fn a_derived_key_is_not_a_bare_digest_of_the_password() {
+        // Guards against this being "simplified" back to SHA-256: a fast digest
+        // would also be a valid 32 bytes, and would leave the stored credential
+        // open to offline guessing. The whole point is that it is not one.
+        use sha2::{Digest, Sha256};
+
+        let salt = new_salt().unwrap();
+        let key = derive_key("pw", &salt).unwrap();
+        let fast = b64().encode(Sha256::digest(b"pw"));
+        assert_ne!(
+            key, fast,
+            "the key must not be a plain SHA-256 of the login password"
+        );
     }
 
     #[test]

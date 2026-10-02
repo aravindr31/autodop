@@ -16,6 +16,14 @@ import type { Account, AccountList, AuthCredential, NewAccountInput } from './ty
 import { SEED_ACCOUNTS } from './accounts';
 import { makeCredential, verifyCredential } from './auth';
 import { newId, nextListLabel } from './format';
+import {
+  authStatus,
+  changeLoginPassword,
+  isDesktop,
+  loginPassword,
+  logoutDesktop,
+  setupLogin,
+} from './bridge';
 
 export interface ListSummary {
   count: number;
@@ -33,6 +41,13 @@ export interface AppState {
 
   // ---- session (not persisted) ----
   loggedIn: boolean;
+  /**
+   * Whether a login password exists. In the desktop app the backend owns this,
+   * because the same password derives the key protecting the DOP password.
+   */
+  authConfigured: boolean;
+  /** False until the backend has been asked — avoids prompting for the wrong thing. */
+  authReady: boolean;
 
   // ---- derived selectors ----
   accountByIdNow: (id: string) => Account | undefined;
@@ -62,11 +77,13 @@ export interface AppState {
   /** Replace every list (e.g. after loading from or saving to Atlas). */
   setLists: (lists: AccountList[], activeListId?: string) => void;
 
-  // ---- auth actions (async: WebCrypto) ----
+  // ---- auth actions (async: WebCrypto, or the backend in the desktop app) ----
   setupPassword: (password: string) => Promise<void>;
   login: (password: string) => Promise<boolean>;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
+  /** Ask the backend whether a password is set, and whether we are unlocked. */
+  refreshAuth: () => Promise<void>;
 }
 
 const STORAGE_KEY = 'autodop-state-v1';
@@ -181,6 +198,10 @@ export const useStore = create<AppState>()((set, get) => ({
 
   // ---- session ----
   loggedIn: false,
+  // Optimistic until `refreshAuth` answers: a browser knows from its own
+  // storage, and the desktop app asks the backend.
+  authConfigured: true,
+  authReady: !isDesktop(),
 
   // ---- derived selectors ----
   accountByIdNow: (id) => get().accounts.find((a) => a._id === id),
@@ -323,24 +344,58 @@ export const useStore = create<AppState>()((set, get) => ({
         (lists.some((l) => l.id === state.activeListId) ? state.activeListId : (lists[0]?.id ?? '')),
     })),
 
-  // ---- auth actions (async: WebCrypto) ----
+  // ---- auth actions ----
+  // In the desktop app the backend verifies the password and derives the key
+  // that protects the DOP password from it. The local hash stays as the browser
+  // fallback (`npm run dev` without Tauri), where there is no backend to ask.
   setupPassword: async (password) => {
-    set({ auth: await makeCredential(password), loggedIn: true });
+    if (isDesktop()) {
+      await setupLogin(password);
+      set({ authConfigured: true, loggedIn: true });
+      return;
+    }
+    set({ auth: await makeCredential(password), loggedIn: true, authConfigured: true });
   },
 
   login: async (password) => {
+    if (isDesktop()) {
+      const ok = await loginPassword(password);
+      set({ loggedIn: ok });
+      return ok;
+    }
     if (!(await verifyCredential(get().auth, password))) return false;
     set({ loggedIn: true });
     return true;
   },
 
-  logout: () => set({ loggedIn: false }),
+  logout: () => {
+    if (isDesktop()) void logoutDesktop();
+    set({ loggedIn: false });
+  },
 
   changePassword: async (oldPassword, newPassword) => {
     if (newPassword.trim().length < 1) return false;
+    if (isDesktop()) {
+      const res = await changeLoginPassword(oldPassword, newPassword);
+      return res.ok;
+    }
     if (!(await verifyCredential(get().auth, oldPassword))) return false;
     set({ auth: await makeCredential(newPassword), loggedIn: true });
     return true;
+  },
+
+  refreshAuth: async () => {
+    if (!isDesktop()) {
+      set({ authConfigured: get().auth !== null, authReady: true });
+      return;
+    }
+    const status = await authStatus();
+    set({
+      authConfigured: status?.configured ?? false,
+      // The derived key lives only for a session, so a reload starts locked.
+      loggedIn: status?.unlocked ?? false,
+      authReady: true,
+    });
   },
 }));
 

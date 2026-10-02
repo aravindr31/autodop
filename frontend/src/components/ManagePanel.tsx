@@ -147,7 +147,7 @@ function ChangePasswordSection(): React.ReactElement {
     const ok = await store.changePassword(oldPw, newPw);
     setBusy(false);
     if (ok) {
-      notify('Password updated', 'success');
+      notify('Password updated — the DOP password was re-encrypted', 'success');
       setOldPw(''); setNewPw(''); setNewPw2('');
     } else {
       notify('Current password is incorrect', 'error');
@@ -156,6 +156,12 @@ function ChangePasswordSection(): React.ReactElement {
 
   return (
     <Section title="Change Password">
+      <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+        This is the password that unlocks the app, and the one the stored DOP
+        password is encrypted with. Changing it re-encrypts that for you.
+        <strong> If you forget it, the saved DOP password cannot be recovered</strong> —
+        you would re-enter it from Manage → DOP portal password.
+      </p>
       <form
         className="flex flex-col gap-2"
         onSubmit={(e) => {

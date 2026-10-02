@@ -195,6 +195,71 @@ export async function saveCredentials(
   }
 }
 
+/** Whether a login password is set, and whether this session is unlocked. */
+export interface AuthStatus {
+  configured: boolean;
+  unlocked: boolean;
+}
+
+export async function authStatus(): Promise<AuthStatus | null> {
+  if (!isDesktop()) return null;
+  try {
+    return await invoke<AuthStatus>('auth_status');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Set the login password on first run.
+ *
+ * In the desktop app this also derives the key that protects the DOP password,
+ * which is why the password is sent to the backend rather than hashed here.
+ */
+export async function setupLogin(password: string): Promise<{ ok: boolean; error?: string }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    await invoke('setup_login', { password });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Verify the login password and unlock the stored credential for this session. */
+export async function loginPassword(password: string): Promise<boolean> {
+  if (!isDesktop()) return false;
+  try {
+    return await invoke<boolean>('login', { password });
+  } catch {
+    return false;
+  }
+}
+
+/** Forget the derived key. */
+export async function logoutDesktop(): Promise<void> {
+  if (!isDesktop()) return;
+  try {
+    await invoke('logout');
+  } catch {
+    /* nothing useful to do */
+  }
+}
+
+/** Change the login password, re-wrapping the stored DOP password with it. */
+export async function changeLoginPassword(
+  oldPassword: string,
+  newPassword: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    await invoke('change_login_password', { oldPassword, newPassword });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** What the local database currently holds. */
 export async function localStatus(): Promise<LocalStatus | null> {
   if (!isDesktop()) return null;

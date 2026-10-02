@@ -16,7 +16,8 @@ const FIELD =
 
 export default function AuthScreen(): React.ReactElement {
   const store = useStore.getState();
-  const needsSetup = useStore((s) => s.auth === null);
+  const needsSetup = useStore((s) => s.authConfigured === false);
+  const authReady = useStore((s) => s.authReady);
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
   const [err, setErr] = useState('');
@@ -39,6 +40,14 @@ export default function AuthScreen(): React.ReactElement {
       setBusy(false);
     }
   };
+
+  if (!authReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-400">
+        Checking…
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-slate-50 px-4">

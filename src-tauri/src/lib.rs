@@ -395,40 +395,103 @@ fn read_key_file(path: &Path) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-/// The key for anything this app encrypts itself — a configured `FERNET_KEY`
-/// if there is one, otherwise a key generated on first use.
+/// The key derived from the login password, held in memory only.
 ///
-/// Generating one is what lets a fresh install store a DOP password without
-/// anyone hand-editing a `.env`. It is deliberately *not* the key used for
-/// reading the Atlas copy: a brand-new key cannot decrypt that, and generating
-/// one eagerly would turn an honest "FERNET_KEY is not configured" into a
-/// misleading HMAC failure.
-fn app_key(app: &AppHandle) -> Result<String, String> {
-    if let Some(key) = db::fernet_key(Some(app)) {
-        return Ok(key);
-    }
-    let path = key_path(app)?;
-    if let Some(existing) = read_key_file(&path) {
-        return Ok(existing);
-    }
+/// Deliberately never written to disk. That is the point of the change: the
+/// stored DOP password is useless to anyone who copies `autodop.db`, because the
+/// key that opens it exists only while someone is signed in.
+#[derive(Default)]
+struct Unlock(Mutex<Option<String>>);
 
-    let key = crypt::generate_key()?;
-    std::fs::write(&path, &key)
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+const META_LOGIN_HASH: &str = "login_hash";
+const META_KDF_SALT: &str = "kdf_salt";
+
+/// The key for this session, if unlocked.
+fn unlocked_key(app: &AppHandle) -> Option<String> {
+    app.state::<Unlock>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+}
+
+fn set_unlocked_key(app: &AppHandle, key: String) {
+    if let Ok(mut slot) = app.state::<Unlock>().0.lock() {
+        *slot = Some(key);
     }
+}
+
+fn clear_unlocked_key(app: &AppHandle) {
+    if let Ok(mut slot) = app.state::<Unlock>().0.lock() {
+        *slot = None;
+    }
+}
+
+/// Derive the key from `password` with the stored salt, and hold it.
+fn unlock_with(app: &AppHandle, password: &str) -> Result<String, String> {
+    let salt = open_store(app)?
+        .meta(META_KDF_SALT)
+        .ok_or("no key salt is stored — set the login password first")?;
+    let key = crypt::derive_key(password, &salt)?;
+    set_unlocked_key(app, key.clone());
     Ok(key)
 }
 
-/// Read that key without creating one — for decrypting a file that exists.
-fn existing_app_key(app: &AppHandle) -> Option<String> {
-    if let Some(key) = db::fernet_key(Some(app)) {
-        return Some(key);
+/// Keys this install may have used before the password-derived one: the old
+/// `key` file, and `FERNET_KEY`. Read only, to migrate an existing credential.
+fn legacy_keys(app: &AppHandle) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Ok(path) = key_path(app) {
+        if let Some(key) = read_key_file(&path) {
+            keys.push(key);
+        }
     }
-    read_key_file(&key_path(app).ok()?)
+    if let Some(key) = db::fernet_key(Some(app)) {
+        if !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// Re-encrypt a credential left under an older key, once, at unlock.
+///
+/// Without this an upgrade would leave the stored DOP password readable only by
+/// a key nothing uses any more — which is to say, unreadable.
+fn migrate_credential(app: &AppHandle, key: &str) -> Result<bool, String> {
+    let store = open_store(app)?;
+    let migrated = migrate_credential_with(&store, key, &legacy_keys(app))?;
+    if migrated {
+        // The old key file has no further use, and leaving it behind would keep
+        // a copy of the secret's key on disk for no reason.
+        if let Ok(path) = key_path(app) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(migrated)
+}
+
+/// The migration itself, free of the app handle so it can be tested.
+fn migrate_credential_with(
+    store: &store::Store,
+    key: &str,
+    legacy: &[String],
+) -> Result<bool, String> {
+    let Some(stored) = store.credentials()? else {
+        return Ok(false);
+    };
+    // Already under the derived key: nothing to do.
+    if crypt::decrypt(key, &stored.token).is_ok() {
+        return Ok(false);
+    }
+
+    for old in legacy {
+        if let Ok(plain) = crypt::decrypt(old, &stored.token) {
+            store.set_credentials(&stored.username, &crypt::encrypt(key, &plain)?)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The local database file, beside `credentials.json` in the app-config folder.
@@ -452,7 +515,7 @@ fn decrypt_stored(app: &AppHandle, stored: &str) -> Option<String> {
     if !stored.starts_with("gAAAA") {
         return Some(stored.to_string());
     }
-    existing_app_key(app).and_then(|key| crypt::decrypt(&key, stored).ok())
+    unlocked_key(app).and_then(|key| crypt::decrypt(&key, stored).ok())
 }
 
 /// `DOP_USERNAME` / `DOP_PASSWORD` from the environment or a `.env`.
@@ -629,10 +692,11 @@ fn set_credentials(
         return Err("Username and password are both required.".into());
     }
 
-    // Encrypt before anything touches the disk — never store it in the clear.
-    // `app_key` generates a key on first use, so this works on a fresh install
-    // with no .env at all.
-    let key = app_key(&app)?;
+    // Encrypted with the key derived from the login password, so it can only be
+    // written while signed in — and the key itself is never stored.
+    let key = unlocked_key(&app).ok_or(
+        "Sign in first — the DOP password is encrypted with a key derived from your password.",
+    )?;
     let token = crypt::encrypt(&key, &password)?;
 
     open_store(&app)?.set_credentials(&username, &token)?;
@@ -641,6 +705,110 @@ fn set_credentials(
         stored_encrypted: true,
         location: store_path(&app)?.display().to_string(),
     })
+}
+
+/// Whether a login password is set, and whether this session is unlocked.
+#[derive(Debug, Serialize)]
+pub struct AuthStatus {
+    pub configured: bool,
+    pub unlocked: bool,
+}
+
+#[tauri::command]
+fn auth_status(app: AppHandle) -> AuthStatus {
+    let configured = open_store(&app)
+        .ok()
+        .and_then(|store| store.meta(META_LOGIN_HASH))
+        .is_some();
+    AuthStatus {
+        configured,
+        unlocked: unlocked_key(&app).is_some(),
+    }
+}
+
+/// Set the login password on first run, and unlock with it.
+#[tauri::command]
+fn setup_login(app: AppHandle, password: String) -> Result<(), String> {
+    if password.is_empty() {
+        return Err("The password cannot be empty.".into());
+    }
+    let store = open_store(&app)?;
+    if store.meta(META_LOGIN_HASH).is_some() {
+        return Err("A login password is already set — sign in instead.".into());
+    }
+    store.set_meta(META_LOGIN_HASH, &crypt::hash_login(&password)?)?;
+    store.set_meta(META_KDF_SALT, &crypt::new_salt()?)?;
+    let key = unlock_with(&app, &password)?;
+    // An install upgrading from the old key file has its DOP password under a
+    // key nothing uses any more; move it across now.
+    let _ = migrate_credential(&app, &key);
+    Ok(())
+}
+
+/// Verify the login password, derive the key, and migrate an old credential.
+///
+/// `Ok(false)` means the password was simply wrong — not an error.
+#[tauri::command]
+fn login(app: AppHandle, password: String) -> Result<bool, String> {
+    let store = open_store(&app)?;
+    let Some(phc) = store.meta(META_LOGIN_HASH) else {
+        return Err("No login password is set yet.".into());
+    };
+    if !crypt::verify_login(&password, &phc) {
+        clear_unlocked_key(&app);
+        return Ok(false);
+    }
+    let key = unlock_with(&app, &password)?;
+    // A credential written under the old key file is re-encrypted here, once.
+    let _ = migrate_credential(&app, &key);
+    Ok(true)
+}
+
+/// Forget the key for this session.
+#[tauri::command]
+fn logout(app: AppHandle) {
+    clear_unlocked_key(&app);
+}
+
+/// Change the login password, re-wrapping the stored DOP password with it.
+///
+/// The re-wrap is not optional: the key that opens the stored credential is
+/// derived from this password, so changing the password without re-encrypting
+/// would leave the DOP password permanently unreadable.
+#[tauri::command]
+fn change_login_password(
+    app: AppHandle,
+    old_password: String,
+    new_password: String,
+) -> Result<(), String> {
+    if new_password.is_empty() {
+        return Err("The new password cannot be empty.".into());
+    }
+
+    let store = open_store(&app)?;
+    let Some(phc) = store.meta(META_LOGIN_HASH) else {
+        return Err("No login password is set yet.".into());
+    };
+    if !crypt::verify_login(&old_password, &phc) {
+        return Err("The current password is not right.".into());
+    }
+    let current = unlocked_key(&app).ok_or("Sign in first, then change the password.")?;
+
+    // New salt and key first, so the credential can be moved across in one step.
+    let salt = crypt::new_salt()?;
+    let new_key = crypt::derive_key(&new_password, &salt)?;
+
+    if let Some(stored) = store.credentials()? {
+        let plain = crypt::decrypt(&current, &stored.token).map_err(|_| {
+            "The stored DOP password could not be read with the current key.".to_string()
+        })?;
+        store.set_credentials(&stored.username, &crypt::encrypt(&new_key, &plain)?)?;
+    }
+
+    store.set_meta(META_LOGIN_HASH, &crypt::hash_login(&new_password)?)?;
+    store.set_meta(META_KDF_SALT, &salt)?;
+    set_unlocked_key(&app, new_key);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1165,7 +1333,9 @@ async fn import_from_atlas(app: AppHandle, force: bool) -> Result<ImportReport, 
         .ok_or("No MONGO_URI configured — there is nothing to import from.")?;
     let atlas_key = db::fernet_key(Some(&app))
         .ok_or("FERNET_KEY is not configured, so the Atlas copy cannot be read.")?;
-    let dest_key = app_key(&app)?;
+    let dest_key = unlocked_key(&app).ok_or(
+        "Sign in first — the DOP password is re-encrypted with a key derived from your password.",
+    )?;
 
     // Read first, then write: the connection must not be alive across an await.
     let dump = read_atlas(&cfg, &atlas_key).await?;
@@ -1199,6 +1369,7 @@ async fn dop_credentials_status(app: AppHandle) -> db::DopCredentialStatus {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(Unlock::default())
         .setup(|app| {
             // Make `.env` values visible to code that reads `std::env` directly
             // (`AUTODOP_PYTHON`, `AUTODOP_SCRAPER`); `db::setting` only looks up.
@@ -1207,6 +1378,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            auth_status,
+            setup_login,
+            login,
+            logout,
+            change_login_password,
             set_credentials,
             generate_lists,
             dop_credentials_status,
@@ -1299,6 +1475,54 @@ mod tests {
         assert_eq!(bundled_sidecar_in(&dir).unwrap(), expected);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn migrates_a_credential_from_the_old_key_file() {
+        let store = store::Store::open_in_memory().unwrap();
+        let old = crypt::generate_key().unwrap();
+        let new = crypt::derive_key("my login password", &crypt::new_salt().unwrap()).unwrap();
+
+        // Written under the old key, as an upgrading install has it.
+        store
+            .set_credentials("DOP.MI1", &crypt::encrypt(&old, "portal-secret").unwrap())
+            .unwrap();
+        let before = store.credentials().unwrap().unwrap();
+        assert!(
+            crypt::decrypt(&new, &before.token).is_err(),
+            "the new key must not open the old ciphertext"
+        );
+
+        // Offered the old key as a legacy source, it moves across.
+        assert!(migrate_credential_with(&store, &new, &[old]).unwrap());
+        let after = store.credentials().unwrap().unwrap();
+        assert_eq!(crypt::decrypt(&new, &after.token).unwrap(), "portal-secret");
+        assert_eq!(after.username, "DOP.MI1", "the portal id is untouched");
+
+        // Idempotent: nothing left to do the second time.
+        assert!(!migrate_credential_with(&store, &new, &[]).unwrap());
+    }
+
+    #[test]
+    fn leaves_a_credential_alone_when_no_legacy_key_opens_it() {
+        let store = store::Store::open_in_memory().unwrap();
+        let stranger = crypt::generate_key().unwrap();
+        let new = crypt::derive_key("pw", &crypt::new_salt().unwrap()).unwrap();
+        store
+            .set_credentials("DOP.MI1", &crypt::encrypt(&stranger, "x").unwrap())
+            .unwrap();
+
+        // A key that does not open it must not clobber it.
+        assert!(!migrate_credential_with(&store, &new, &[crypt::generate_key().unwrap()]).unwrap());
+        let stored = store.credentials().unwrap().unwrap();
+        assert_eq!(crypt::decrypt(&stranger, &stored.token).unwrap(), "x");
+    }
+
+    #[test]
+    fn migrating_with_no_credential_is_a_no_op() {
+        let store = store::Store::open_in_memory().unwrap();
+        let key = crypt::generate_key().unwrap();
+        assert!(!migrate_credential_with(&store, &key, &[]).unwrap());
     }
 
     #[test]

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.4 — 2026-10-02
+
+### Other
+
+- Merge pull request #5 from aravindr31/fix/frontend-list-ui
+- bump version to 0.7.3
+- update release branch configuration and version to 0.7.2
+
 ## v0.7.0 — 2026-10-02
 
 ### Features

@@ -81,14 +81,23 @@ export function IconButton({
 /* Badge / pill                                                          */
 /* ------------------------------------------------------------------ */
 
-export function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'accent' | 'positive' }): React.ReactElement {
+export function Pill({
+  children,
+  tone = 'neutral',
+  size = 'sm',
+}: {
+  children: ReactNode;
+  tone?: 'neutral' | 'accent' | 'positive';
+  size?: 'sm' | 'md';
+}): React.ReactElement {
   const styles: Record<string, string> = {
     neutral: 'bg-slate-100 text-slate-700',
     accent: 'bg-indigo-50 text-indigo-700',
     positive: 'bg-emerald-50 text-emerald-700',
   };
+  const sizing = size === 'md' ? 'px-3 py-1 text-sm' : 'px-2 py-0.5 text-xs';
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${styles[tone]}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full font-medium ${sizing} ${styles[tone]}`}>
       {children}
     </span>
   );

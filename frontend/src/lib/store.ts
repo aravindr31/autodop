@@ -20,8 +20,11 @@ import { newId, nextListLabel } from './format';
 import {
   authStatus,
   changeLoginPassword,
+  dbListToLocal,
   deleteAccount as deleteAccountRemote,
   isDesktop,
+  loadAccountsFromDb,
+  loadLists,
   loginPassword,
   logoutDesktop,
   saveAccount,
@@ -120,6 +123,38 @@ function rememberedOwner(): OwnerInfo | null {
     }
   } catch { /* corrupt */ }
   return null;
+}
+
+/**
+ * Drop everything the previous session had on screen — accounts, lists and
+ * the persisted copy of them. Workspaces are isolated in the database, but
+ * the webview also keeps a local cache, and a new workspace must never
+ * inherit the last user's rows. `submitEndpoint` survives: it is a per-
+ * machine preference, not data.
+ */
+function clearWorkspaceCache(): { accounts: Account[]; lists: AccountList[]; activeListId: string } {
+  try { localStorage.removeItem(STORAGE_KEY); } catch { /* private mode */ }
+  if (isDesktop()) {
+    return { accounts: [], lists: structuredClone(DEFAULT_LISTS), activeListId: DEFAULT_LISTS[0].id };
+  }
+  return { accounts: SEED_ACCOUNTS, lists: structuredClone(DEFAULT_LISTS), activeListId: DEFAULT_LISTS[0].id };
+}
+
+/** Pull the signed-in owner's data out of the database. */
+async function loadWorkspaceFromDb(): Promise<{
+  accounts: Account[];
+  lists?: AccountList[];
+  activeListId?: string;
+} | null> {
+  const accounts = await loadAccountsFromDb();
+  if (!accounts.ok || !accounts.accounts) return null;
+  const lists = await loadLists();
+  if (!lists.ok || !lists.lists) return { accounts: accounts.accounts };
+  return {
+    accounts: accounts.accounts,
+    lists: lists.lists.map(dbListToLocal),
+    activeListId: lists.activeId,
+  };
 }
 
 const DEFAULT_LISTS: AccountList[] = [{ id: 'main', name: 'A', accountIds: [] }];
@@ -401,6 +436,7 @@ export const useStore = create<AppState>()((set, get) => ({
         currentOwner: res.owner,
         selectedOwner: res.owner,
         owners: [...get().owners, res.owner],
+        ...clearWorkspaceCache(),
       });
       return;
     }
@@ -421,12 +457,21 @@ export const useStore = create<AppState>()((set, get) => ({
           owners: get().owners.some((o) => o.id === res.owner!.id)
             ? get().owners
             : [...get().owners, res.owner],
+          ...clearWorkspaceCache(),
         });
+        // Put this owner's actual data on screen, not an empty shell.
+        const fresh = await loadWorkspaceFromDb();
+        if (fresh) {
+          set({
+            accounts: fresh.accounts,
+            ...(fresh.lists ? { lists: fresh.lists, activeListId: fresh.activeListId ?? get().activeListId } : {}),
+          });
+        }
       } else if (res.error) {
-        set({ owners: [], selectedOwner: null, loggedIn: false });
+        set({ owners: [], selectedOwner: null, loggedIn: false, ...clearWorkspaceCache() });
         throw new Error(res.error);
       } else {
-        set({ loggedIn: false });
+        set({ loggedIn: false, ...clearWorkspaceCache() });
       }
       return res.ok;
     }
@@ -442,7 +487,9 @@ export const useStore = create<AppState>()((set, get) => ({
 
   logout: () => {
     if (isDesktop()) void logoutDesktop();
-    set({ loggedIn: false, currentOwner: null });
+    // The next sign-in may be a different person; never leave this one's
+    // rows on screen or in the cache.
+    set({ loggedIn: false, currentOwner: null, ...clearWorkspaceCache() });
   },
 
   changePassword: async (oldPassword, newPassword) => {

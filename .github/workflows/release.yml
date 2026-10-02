@@ -39,7 +39,9 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libssl-dev
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm --prefix frontend ci
 
       - name: Rust formatting
         run: cd src-tauri && cargo fmt --check
@@ -128,7 +130,9 @@ jobs:
             librsvg2-dev patchelf libssl-dev libglib2.0-dev libdbus-1-dev
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm --prefix frontend ci
 
       - name: Build scraper sidecar
         run: npm run build:sidecar

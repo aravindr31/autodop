@@ -1,5 +1,481 @@
 # Changelog
 
+## v0.7.2 — 2026-10-02
+
+### Features
+
+- commit-driven versioning with VERSION and CHANGELOG
+- cross-platform builds + GitHub Actions release
+- denomination pill one size up
+- view-density switch for the account display
+- add a new workspace from the login screen
+- first-run import from the Deposit-Accounts PDF
+- local multi-account workspaces
+- portable JSON backup
+- remove Atlas entirely
+- backup and restore the local database
+- encrypt the DOP password with a key derived from the login password
+- make SQLite the store, with Atlas as a one-time import
+- tell builds apart, ship without Python, and make a .dmg that builds
+- rotate the DOP password from the app, and bundle scraper.py
+- multi-list Generate, explicit rebates, and visible scraper logs
+- read DOP credentials from Atlas, decrypting the stored password
+- keep Save lists to Atlas clickable on a read-only user
+- read lists from Atlas, with per-account rebates
+- read accounts from MongoDB Atlas (Rust backend)
+- convert the desktop shell to Tauri (drop pywebview)
+- desktop shell (pywebview) to invoke scraper.py from the UI
+- account management + client-side auth
+- alphabetical auto-named lists + Create List button
+- Astro.js frontend for AutoDOP (spec.md)
+
+### Fixes
+
+- restrict ci run only for pul request
+- update node version for cd pipeline
+- fix the ci pipeline
+- restore scraper.py
+- pull the signed-in owner's data after every sign-in
+- PDF-imported denominations displayed 100x too large
+- keep the webview cache across sign-out
+- never let one workspace's rows appear under another
+- explain the read-only-DMG write failure
+- stop the build stamp lagging a commit behind the code
+- clear every list at once, and stop the count badge hiding under the X
+- avoid fresh-object selector in App header totals
+
+### Other
+
+- Merge pull request #4 from aravindr31/fix/frontend-list-ui
+- remove unused backend input section from ListsView
+- Merge pull request #3 from aravindr31/fix/cicd
+- Merge pull request #2 from aravindr31/fix/frontend-list-ui
+- remove stale cde for old custom backend logic
+- Merge pull request #1 from aravindr31/feature/cicd_test
+- install frontend dependencies for the type check
+- Astro from the registry, which requires Node 22. Install the frontend's
+- own pinned dependencies first so the local binary is used.
+- adding back scraper.py
+- — fails without ../scraper.py present. Lost in the pipeline-testing
+- commit; restored verbatim from history.
+- testing cicd pipeline
+- code refactroing
+- restore the handoff and spec docs swept up by the release commit
+- pipeline derives the next version from conventional commit messages since
+- the last release (feat → minor, fix → patch, breaking → major), writes
+- VERSION, CHANGELOG.md and all four fields, tags vX.Y.Z, builds the three
+- platforms from that exact commit, and publishes the changelog section as
+- the release notes. Docs-only merges skip the release; PRs must come from
+- feature/fix/hotfix branches; README documents the whole flow.
+- refuse a release whose version already exists
+- version no v* tag has shipped, and all four version fields agree.
+- release on merge to main, gated by tests
+- tag. The test job runs first and the 3-OS build needs it. The version is
+- read from tauri.conf.json — bump it in the PR being merged; the release
+- reuses the v<version> tag if a run repeats.
+- test gate on every push
+- release.yml builds and ships only tagged versions on top of that.
+- handoff — cross-platform builds
+- path and passing --bundles app everywhere — Windows and Linux would have
+- failed outright. The platform branch now comes first: macOS builds the
+- .app and the verified DMG as before, Windows gets NSIS/MSI, Linux
+- AppImage/deb, with the .cmd shim resolved for the Windows tauri binary.
+- release.yml builds all three on their own runners (PyInstaller sidecar per
+- OS, WebKit/GTK prereqs on Linux) and attaches the installers to the GitHub
+- release on a v* tag.
+- bump version to 0.6.1 across all relevant files
+- update text in Desktop, Scraper, and Backup sections for clarity
+- clarify the Change Password section title
+- in the next size up (text-sm, roomier padding).
+- account number leads the card (it is the identity the portal pays against)
+- and the CNumber is gone — the table view carries it along with Ref. The
+- card Add button is full-size instead of small.
+- out and back into a different workspace left the screen on whatever the
+- sign-in fetch managed, with nothing retrying. The load now re-runs on every
+- sign-in, accounts and lists both, and failures are surfaced instead of
+- silently leaving an empty screen.
+- the decimal point — before parsing, so 10000.00 became ₹10,00,000
+- everywhere. The importer now stores whole rupees ('10000') and the
+- formatters parse decimals without swallowing the dot.
+- clearing on sign-out as well emptied the persisted copy and broke the
+- reload-from-blob path.
+- sign-out and sign-in, so a freshly created workspace showed the previous
+- owner's data. Signing in, out, or creating a workspace now clears the cache
+- and pulls the signed-in owner's accounts and lists straight from the
+- database.
+- (portal id + password) on a machine that already has workspaces — that was
+- the only way in for a second person.
+- printout and every row becomes an account — number, name and denomination
+- (commas stripped); REF and CNumber stay empty. Long holder names that wrap
+- across two extracted lines are stitched by carrying the previous line
+- forward; duplicates under the owner are skipped and reported. Verified
+- against a real 160-row PDF: every row parses. Version 0.6.0.
+- handoff — multi-account
+- with their own login password, accounts, lists, DOP credential and run
+- history. The schema moves to v2: an owners table, owner_id on accounts,
+- lists and runs, and owner-keyed credentials — existing single-user
+- databases migrate under a 'default' owner named after the saved portal id
+- (verified against a copy of the live store).
+- The login screen asks for the portal id and password on setup, remembers
+- the last workspace in localStorage so it asks only for the password, and
+- offers a workspace switcher for a second person — who can sign in and
+- import their own portable backup into a separate space. Added accounts now
+- persist through save_account/delete_account instead of living only in the
+- webview.
+- every file write with os error 30 — including backups to ~/Downloads. The
+- backup commands now say so and point to copying the app to Applications.
+- plain JSON, the DOP password as the same Fernet token the store holds, plus
+- the KDF salt and login hash that open it. The app login password is the key —
+- importing on another machine means using the same login password there, which
+- is verified against the carried hash before the DOP password is decrypted and
+- re-encrypted under the new machine's login. Export needs no password; import
+- keeps a pre-restore safety copy. Verified by roundtrip tests and a real
+- export of the live store (148 accounts, 26 lists, credential).
+- handoff — Atlas removed
+- Atlas credential fallback have no reason to exist. db.rs shrinks to the .env
+- reader and the shared list/credential types; the mongodb and futures-util
+- dependencies are gone. Credential resolution is now env → local database →
+- legacy credentials.json, and the Import from Atlas section is removed from
+- Manage. The Atlas-only probes (import_probe, db_schema, db_probe,
+- fernet_probe) go with it.
+- SQLite's own backup API (the store runs in WAL; a raw copy can miss pages),
+- carrying accounts, lists, the encrypted DOP password, the login hash and the
+- KDF salt — openable only with the login password the key was derived from.
+- Restore refuses non-AutoDOP files, keeps the replaced database as
+- autodop.db.pre-restore-<stamp>, and signs out. Verified by module tests and
+- the backup_probe roundtrip, plus a real export of the live store.
+- session handoff
+- three open items — so a fresh session does not have to rediscover it. Delete
+- once superseded.
+- rustfmt build.rs
+- which is why the 0.4.0 build stamps itself ed9c500+dirty. The artifact is
+- unaffected; the next build will stamp cleanly.
+- `key` file generated beside the database. That key sits next to the ciphertext it
+- protects, so anyone who copies the app-config folder gets both. It is now
+- encrypted with a key derived from the login password instead: Argon2id over a
+- stored salt, and the key itself is never written anywhere. It exists only in
+- memory, only while someone is signed in.
+- Argon2id, not a bare SHA-256. A fast digest is the wrong tool here: a GPU does
+- billions of them a second, the login password may be one character, and the
+- scenario this defends against is exactly someone holding the database file. A
+- test asserts the derived key is not a plain digest of the password, so it cannot
+- be "simplified" back later.
+- This needs the login password on the Rust side, which had it nowhere — the check
+- was a salted hash in the webview's localStorage. Verification now happens in the
+- backend (Argon2id, PHC string in `meta`), and the webview no longer stores a
+- password hash at all. The browser fallback stays for `npm run dev` without Tauri.
+- Two consequences, both handled:
+-   - changing the login password re-encrypts the stored DOP password in the same
+-     step; without that the credential would become permanently unreadable, and
+-     the Manage panel now says so.
+-   - an install upgrading from the key file has its credential re-encrypted at
+-     first unlock, and the key file is deleted. Three tests cover that path,
+-     including that a key which does not open the credential leaves it alone
+-     rather than clobbering it.
+- cargo test 63/63, no warnings, astro check 0/0/0, smoke pass, .app and
+- .dmg built as 0.4.0.
+- Still to come: removing the Atlas code and the mongodb dependency, and the
+- backup/restore feature.
+- 0.3.0 — the local-database release
+- 0.2.0 build that still talked to Atlas.
+- survive being handed to more than one person: whoever holds MONGO_URI holds the
+- whole database, and the tenant filtering that would fix it is not something a
+- desktop app can enforce. Each agent's accounts, lists and DOP password are theirs
+- alone, so they now live in one SQLite file on their machine and nothing is shared.
+- New store (src-tauri/src/store.rs), one file per install:
+-   accounts       number is unique
+-   lists          A-Z, one flagged active
+-   list_entries   membership, in order, with the rebate
+-   credentials    the DOP id + a Fernet-encrypted password
+-   runs           one row per Generate: what was asked for and how it ended
+-   meta           schema version, whether the import has run
+- list_entries cascades from accounts and lists, so deleting either takes its
+- membership with it. rebate keeps 0 as the default and 1 as a real value meaning
+- "skip the rebate step". The store takes a path rather than an AppHandle, which is
+- what lets all of it be tested against an in-memory database — 14 tests covering
+- the schema, the cascades, ordering, upserts by id and by name, the single active
+- flag, stale references, and the credential round trip.
+- Atlas is now read once, by Import from Atlas, and never written. That removes the
+- read-only-role problem entirely: the role never needed to be writable. The DOP
+- password is re-encrypted under this machine's own key on the way in. Credential
+- resolution is env -> local database -> credentials.json -> Atlas, the last only
+- as a fallback until the import has run here.
+- Reading and writing are deliberately split (read_atlas / write_import): a
+- rusqlite Connection is not Send, and a Tauri command's future must be, so no
+- connection may be alive across an await.
+- Verified against the real cluster: 148 accounts, 26 lists (active A) and the
+- credential, imported into a throwaway database via
+- `cargo run --example import_probe`. cargo test 54/54, astro check 0/0/0, smoke
+- pass, .app and .dmg built.
+- Not done yet: db.rs and the mongodb dependency are still present for the import,
+- and the .env.example / Atlas docs still describe the old model in places.
+- add a read-only Atlas schema dump
+- types) so the data model can be described without reading a single value.
+- accountHolders holds account numbers and names, and users holds a password
+- ciphertext, so nothing but structure is printed.
+-     cargo run --example db_schema
+- scope the '+dirty' build flag to the paths that affect the binary
+- should not make every build look unreleased. The check now covers src-tauri,
+- frontend, scripts, package.json and scraper.py only.
+- precisely the confusion the stamp exists to remove.
+- Two causes:
+-   - build.rs watched ../.git/HEAD, but a commit updates the branch ref, not
+-     HEAD, so cargo never re-ran it. It now also watches .git/refs/heads and
+-     .git/packed-refs.
+-   - `git log -1 %h` was replaced with `git rev-parse --short HEAD` so the stamp
+-     is the revision the working tree is actually on.
+- An uncommitted build now stamps itself "<sha>+dirty · <time>" rather than
+- looking like a released revision.
+- Which build am I running?
+-   Every build has been "0.1.0", so an install could not be distinguished from
+-   the one before it — and the DMG step was failing, so there was often no new
+-   installer to install anyway. Now:
+-     - build.rs stamps each build with the commit and the time it was built
+-     - the stamp is shown at the bottom of the list panel, on the sign-in screen,
+-       and as "This build" in Manage
+-     - `npm run version:bump -- 0.3.0` updates all four version fields together,
+-       including tauri.conf.json, which names the installer
+-     - `cargo run --example build_info` prints version/commit/build from a build
+-   The commit alone was not enough: rebuilding the same commit would look
+-   identical, so the stamp carries a minutes-resolution build time too.
+- No Python on the target machine
+-   `npm run build:sidecar` freezes scraper.py with PyInstaller into
+-   src-tauri/binaries/scraper-<os>-<arch>[.exe], which Tauri ships inside the app.
+-   The app prefers it over the bundled .py: a frozen helper is given the
+-   arguments directly, a .py gets an interpreter in front of it. Verified by
+-   running the bundled copy with the venv hidden and an empty environment — it
+-   loads its own Python, selenium and webdriver_manager, and links nothing but
+-   system libraries. Chrome is still required, and the first run fetches a
+-   matching chromedriver. With no sidecar present everything works as before, so
+-   a plain clone-and-build needs no PyInstaller.
+-   A fresh install can now store a DOP password with no .env at all: the app
+-   generates its own key on first use, beside credentials.json. Deliberately not
+-   the key that reads Atlas — a new key cannot decrypt that, and generating one
+-   eagerly would turn an honest "FERNET_KEY is not configured" into a bogus HMAC
+-   failure.
+- A .dmg that actually builds
+-   Tauri's DMG step writes its scratch rw.*.dmg into the folder it is about to
+-   copy, so the image contains a copy of itself: failures leave tens of MB
+-   behind, each retry nests deeper, and it ends in a misleading "No space left
+-   on device" from the resize step. scripts/build.mjs builds the .app, stages a
+-   pristine copy outside the bundle tree, makes the image in one hdiutil create,
+-   then mounts it read-only and checks the app, the /Applications symlink, the
+-   bundled .py and the frozen runner really landed. It only reports a .dmg once
+-   those pass. npm run build:tauri keeps the old path.
+- cargo test 40/40, astro check 0/0/0, smoke pass, AutoDOP_0.2.0_aarch64.dmg
+- built (23.2 MB) with all four contents checks OK, and the shipped binary carries
+- the commit stamp.
+- Clear all lists
+-   New store action plus a button in both places lists are managed: the Lists
+-   view (next to Generate All Lists) and the left-hand list panel (under Create
+-   List). It empties every list in one go and reports how many accounts came out;
+-   the lists themselves and the accounts in the Accounts tab are untouched, so it
+-   is an unassignment rather than a delete. Both buttons are two-step, since it
+-   cannot be undone.
+-   clearList now drops the list's rebates along with its accounts. Leaving them
+-   would resurrect an old installment number if the same account were added to
+-   that list again.
+- Count badge under the delete cross
+-   Each row's rename/delete chip is absolutely positioned over the row, and the
+-   row's count badge sat in exactly that strip - so the number was under the X,
+-   showing through the chip's 60% opacity. The row now reserves that strip
+-   (pl-2.5 pr-16: the chip is ~58px including its 6px inset).
+- smoke test extended to cover both fixes - clearAll's return count,
+- every list emptied, lists and accounts preserved, no-op when already empty, and
+- rebates dropped by clearList. astro check 0/0/0, bundles rebuilt, and the built
+- CSS carries a real .pr-16 rule (not just a reference Tailwind never matched).
+- DOP password rotation
+-   India Post expires the portal password twice a year. Manage now has a
+-   "DOP portal password" section: enter the DOP id, type the new password twice,
+-   press Save. Typing it twice is deliberate - one typo would otherwise break
+-   every run until the next rotation.
+-   It is never stored in the clear. crypt.rs could only decrypt Fernet tokens
+-   before this; it now encrypts too (same RustCrypto primitives, same
+-   FERNET_KEY), so credentials.json holds a Fernet token exactly like the Atlas
+-   copy, at mode 600. The app also tries to write that ciphertext back to
+-   users.UserInfo.DOP_password: the configured Atlas role is read-only, so that
+-   is expected to fail today, and the UI says which of the two stores now holds
+-   the new password rather than failing silently.
+-   Interop is proven both ways: a token this code encrypts decrypts under
+-   Python's cryptography.fernet, and Python-generated tokens still decrypt here
+-   (the existing vectors). scripts/fernet_probe.rs exposes the same check.
+- Scraper script location
+-   tauri.conf.json now bundles scraper.py as a resource, so a shipped build
+-   carries its own copy and the path stops being something to configure.
+-   Manage -> "Scraper script" shows which copy is in use and where it came from,
+-   and can point the app at a different script (settings.json) or reset to the
+-   bundled one. Order: chosen -> AUTODOP_SCRAPER -> bundled -> repo -> cwd.
+-   Tauri rewrites a "../" resource into "_up_", so the script actually lands at
+-   Contents/Resources/_up_/scraper.py - the resolver accepts either spelling
+-   rather than assuming, and a test pins both layouts.
+-   Bundling settles the path question only: selenium and Chrome are still
+-   required, since the script is Python rather than a compiled binary.
+- cargo test 34/34, astro check 0/0/0, smoke pass, both bundles built,
+- every command name matches between the Rust handler and the TS bridge, and the
+- script inside .app and .dmg is byte-identical to the repo copy.
+- of them, and the Streamlit UI sent every list in a single call (main.py:543).
+- The new button restores that; the per-list button stays. Both build the same
+- payload - {name, numbers, rebate} - and pass it as argv exactly as the original
+- did (main.py:557 -> run_scraper_script -> subprocess.run), so it is one
+- invocation either way.
+- the original read acc.get("Rebate", 0), and accountHolders documents
+- carry no Rebate field, so 0 was the effective default; this code used 1, which
+- scraper.py treats as "skip the rebate step" (line 165). 0 is now the default
+- everywhere, rebates are editable per account in the list view, and 1 survives a
+- save/load round trip - it was being dropped when writing to Atlas, so an
+- explicit 1 silently reverted to the default.
+- the scraper's stderr was collected, truncated into the result and never
+- rendered, so failures showed only "Scraper produced no parseable result" while
+- the traceback - the actual reason Chrome never opened - was discarded. stderr
+- now streams to the UI live, the log tail is shown with a copy button, and each
+- run writes a timestamped file with the password redacted. The interpreter the
+- app will use is reported in Manage.
+- .env values are copied into the process environment at startup, because
+- :setting only looked them up - so AUTODOP_PYTHON in .env was being ignored
+- and the app silently fell back to python3 on PATH.
+- cargo test 27/27, astro check 0/0/0, smoke pass, .app + .dmg built.
+- clear create-dmg scratch images before bundling the DMG
+- packages src-tauri/target/release/bundle/macos/ as the DMG's *source* folder,
+- and create-dmg writes its temporary rw.*.dmg beside the app. A failed run leaves
+- that ~31 MB image inside the source, so the next run copies it into its own
+- image and fails again, leaving a bigger one - three had accumulated (94 MB)
+- around a 5.7 MB app, and hdiutil reported "No space left on device" while
+- packaging them.
+- npm run build now clears them first (npm run clean:dmg). Verified: dmG builds at
+- 3.0 MB and contains only AutoDOP.app, the Applications symlink and the volume
+- icon.
+- `UserInfo.DOP_password`, a Fernet token the old Streamlit app wrote
+- (main.py -> settings.decrypt_dop_passwd). Only a Fernet-compatible decryptor
+- can read that ciphertext, so crypt.rs implements the Fernet framing on the
+- standard RustCrypto primitives (aes, cbc, hmac, sha2). The `fernet` crate does
+- the same job but links OpenSSL, which this project avoids - it already uses
+- rustls and targets both macOS and Windows.
+- Verified against the reference implementation, not assumed: crypt_vectors.rs
+- holds tokens generated by Python's `cryptography` under a throwaway key, and
+- the tests decrypt them while asserting wrong keys, tampered tokens, truncated
+- tokens and garbage are all rejected. Regenerate with
+- scripts/gen_fernet_vectors.py.
+- Credential resolution is now env/.env -> app-config file -> Atlas, and the
+- decrypted password never crosses into the webview: db::DopCredentials is
+- deliberately not Serialize, and the password goes straight into scraper.py's
+- argv. A new `dop_credentials_status` command reports only the source and the
+- portal id, which Manage -> DOP Credentials displays.
+- Confirmed live: DOP_ID="DOP.MI6855840100003", password decrypted (14 chars,
+- value withheld). cargo test 24/24; frontend build/check 0/0/0; smoke pass.
+- rather than disabled. A refused write now reports that the user is read-only and
+- names the database to grant readWrite on, instead of surfacing the raw Atlas
+- error text. The panel note states the same, so nothing is a surprise.
+- frontend build/check 0/0/0, smoke pass.
+- localStorage.
+- - db.rs: DbList/InputList mapping, fetch_lists_with/save_lists_with (config
+-   taking, so a probe can exercise the real path), list_from_doc handling
+-   {id: ObjectId, rebate} entries, defaults rebate to 1, tolerates bare ObjectIds.
+- - Saving upserts and never deletes; documents key on _id when it is a real
+-   ObjectId, else on listName, so the existing A-Z rows are updated rather than
+-   duplicated (local ids are UUIDs).
+- - db_status now reports `writable` and `roles`. The connection is
+-   readAnyDatabase, so "Save lists to Atlas" is disabled in the UI with the
+-   reason shown rather than failing on click; Load lists and Reload accounts work.
+- - Generate (DOP) sends each account's stored rebate, falling back to 1.
+- - db_probe checks roles read-only; an opt-in write round-trip only ever touches
+-   MONGO_LISTS_COLLECTION and drops it afterwards.
+- cargo test 18/18, db_probe against the live cluster (26 lists A-Z,
+- active=A), frontend build/check/smoke green.
+- - src-tauri/src/db.rs: MONGO_URI from the environment or a gitignored .env
+-   (src-tauri/.env, then <repo>/.env, then the app config dir; AUTODOP_ENV_FILE
+-   overrides). Defaults db=accounts, collection=accountHolders. Maps BSON docs
+-   to the frontend Account shape, coercing ObjectId/numeric denominations to
+-   strings. Client per call, with a ping so a bad host fails loudly.
+- - Commands: db_status (configured/connected/count), load_accounts.
+- - examples/db_probe.rs: read-only connectivity + schema probe (keys only).
+- - Frontend: bridge dbStatus()/loadAccountsFromDb(), store.setAccounts(),
+-   startup hydration (falls back to persisted/seeded accounts), and a
+-   Database section in Manage showing status + Reload accounts.
+- - Security: .gitignore now covers .env and src-tauri/.env; a live URI had been
+-   pasted into the tracked frontend/.env.example and was moved out.
+- Verified against the live cluster: 149 docs in accounts.accountHolders with
+- fields _id, Number, Name, Denomination, CNumber, Ref_Number, addedIn.
+- Note accounts.accounts is EMPTY (savedList has the 26 lists). cargo test 13/13,
+- frontend build/check/smoke green.
+- Generate button can run scraper.py without any browser sandbox or local API
+- server.
+- - src-tauri/: Tauri v2 backend. Commands: app_info, set_credentials,
+-   generate_lists. generate_lists normalizes the UI payload to the
+-   {name,numbers,rebate} shape (rebates padded with 1 = 'no rebate, just pay'),
+-   spawns python3 scraper.py with a 3600s deadline, streams each stdout line to
+-   the page on the 'scraper-progress' event, and parses the trailing JSON array.
+-   Pipes are drained on their own threads so a full buffer cannot deadlock it.
+- - Credentials live in the OS app-config dir (chmod 600), env vars take
+-   precedence; never in webview storage.
+- - frontend/src/lib/bridge.ts: invoke()/listen() instead of window.pywebview;
+-   same public surface, so ListsView/ManagePanel keep working. UI copy updated.
+- - Root package.json (Tauri CLI), generated icon set, README.
+- - Removed desktop/ (pywebview) — superseded.
+- cargo test 6/6, npm run build produces AutoDOP.app + .dmg (release),
+- frontend build/check/smoke all green.
+- native host rather than an API server:
+- - desktop/main.py: pywebview host exposing Api.generate_lists() which runs
+-   scraper.py in-process (subprocess), normalizes the UI payload to the
+-   {name,numbers,rebate} shape (rebate padded with 1 = 'no rebate, just pay'),
+-   parses the trailing JSON result array, and streams progress into the page.
+-   Credentials come from the env or desktop/.env (chmod 600) — never the
+-   browser. Includes --selftest (12 checks, passes).
+- - frontend/src/lib/bridge.ts: detects the shell, calls the Python API, exposes
+-   useDesktop()/onProgress().
+- - ListsView: 'Generate (DOP)' button per list; explains the shell requirement
+-   when running in a plain browser.
+- - ManagePanel: DOP credentials section (writes desktop/.env via the host).
+- - desktop/{requirements.txt,.env.example,.gitignore,README.md}.
+- - Store now owns the live accounts array (seeded from accounts.json) and
+-   exposes addAccount/deleteAccount; UI reads accounts from the store so
+-   mutations reflect immediately and persist (Browser, ListsView resolved via
+-   store; submitList takes an injected account resolver).
+- - client-side session gate (login/logout/change-password) via salted SHA-256
+-   WebCrypto (src/lib/auth.ts); AuthScreen handles first-run setup + sign-in.
+- - ManagePanel drawer: Add New Account, Delete Account (search + inline
+-   confirm), Change Password, Sign out; opened from a gear button in the header.
+- - Smoke test now covers accounts-in-store, add/delete, and the auth round-trip.
+- - Fix base-26 letter generator float-division bug (Math.floor).
+- - Lists auto-name with the next free letter (default list is A, then B, C...
+-   Z, AA, AB...); single-letter and multi-letter sequences via base-26
+- - Sidebar and Lists view render alphabetically
+- - Migrate legacy 'Main List' -> 'A' on load
+- Math.floor in base-26 toLetter (float division corrupted 2nd+ chars)
+- snapshot, which React flags as an uncached getServerSnapshot (infinite-loop
+- warning). Select primitives (count, amount) so snapshots are stable.
+- Tailwind v4 app in frontend/:
+- - Account grid with live search + pagination (spec 3.1)
+- - List management sidebar: create/select/rename/delete, default Main List (3.2)
+- - List view summaries w/ total denomination + count, expandable items, remove (3.3)
+- - Backend submission of a list's account docs to a configurable endpoint (4.3)
+- - Zustand + localStorage persistence across sessions (5)
+- - islands architecture, static shell, dev JSON dataset (6,7,8)
+- inline rename/delete UI, copy-numbers, clear list, toasts, empty
+- states, responsive mobile drawer, env-configurable backend endpoint.
+- astro build + astro check + npm run smoke (store/persistence).
+- Merge pull request #4 from aravindr31/dev-testing
+- sorted lists in list view page in ascending order
+- Merge pull request #3 from aravindr31/dev-testing
+- Chnages to handle multiple Lists at once
+- converted to a streamlit app
+- migrating to astro
+- Merge pull request #1 from dev-Aravind/captcha_update
+- Delete acc.txt
+- version 2.0
+- ref update
+- Merge branch 'master' of https://github.com/AravindR-597/Account_Lookup_Automator into master
+- Completed Project
+- Update admin_fun.js
+- Completed Project
+- addiditonal features
+- addidtional features
+- project completed
+- project completed
+- functional but need future upgarde
+- fully functional
+- finialised
+- initial modeling completed
+
 ## v0.7.0 — 2026-10-02
 
 ### Features

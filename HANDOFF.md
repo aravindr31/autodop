@@ -137,6 +137,16 @@ forward until the row completes. Duplicates under the owner are skipped and
 reported. Verified against a real 160-row PDF: 160/160 parsed, no
 unparsed lines. Probe: `cargo run --example pdf_probe -- /path/to.pdf`.
 
+## Cross-platform builds (done)
+
+`npm run build` branches on OS: macOS keeps the .app + verified-DMG path;
+Windows produces NSIS/MSI and Linux AppImage/deb straight from Tauri
+(`--bundles app` is macOS-only and was applied everywhere — fixed). The
+sidecar must still be built per OS (`build:sidecar`; PyInstaller cannot
+cross-compile). `.github/workflows/release.yml` builds all three on their
+own runners and attaches the installers to the GitHub release on a `v*`
+tag — the shipping path for Windows/Linux users, who also need Chrome.
+
 ## Open work
 
 1. **Local multi-account** — mentioned as a possibility, not started. Would need

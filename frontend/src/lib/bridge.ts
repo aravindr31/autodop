@@ -89,18 +89,28 @@ export async function clearScraperPath(): Promise<{
   }
 }
 
-/** Atlas connection state reported by the Rust backend. */
-export interface DbStatus {
-  configured: boolean;
-  connected: boolean;
-  db: string;
-  collection: string;
-  /** False when the Atlas user can only read — saving lists would be refused. */
-  writable?: boolean;
-  /** Authenticated roles, e.g. `['readAnyDatabase']`. */
-  roles?: string[];
-  count?: number;
+/** The local database this app owns. */
+export interface LocalStatus {
+  /** Absolute path to the SQLite file. */
+  path: string;
+  accounts: number;
+  lists: number;
+  entries: number;
+  has_credentials: boolean;
+  /** When the one-time Atlas import last ran here, if it has. */
+  atlas_imported_at?: string | null;
+  /** Whether an Atlas connection is configured as an import source. */
+  atlas_available: boolean;
   error?: string;
+}
+
+/** What a one-time Atlas import moved across. */
+export interface ImportReport {
+  accounts: number;
+  lists: number;
+  entries: number;
+  credentials: boolean;
+  warnings: string[];
 }
 
 /** A list as stored in Atlas (`savedList`). */
@@ -166,12 +176,10 @@ export async function generateLists(lists: GenList[]): Promise<GenResult> {
 
 /** Where a saved DOP password ended up. */
 export interface SavedCredentials {
-  /** Written to the app-config file, encrypted. */
+  /** Encrypted before it was stored. Always true. */
   stored_encrypted: boolean;
-  /** The `users` document in Atlas was updated too. */
-  atlas_updated: boolean;
-  /** Why the Atlas copy was left alone (read-only role, offline, ...). */
-  atlas_note?: string | null;
+  /** The local database file it now lives in. */
+  location: string;
 }
 
 export async function saveCredentials(
@@ -187,13 +195,30 @@ export async function saveCredentials(
   }
 }
 
-/** Ping Atlas: is a URI configured, and is the cluster reachable? */
-export async function dbStatus(): Promise<DbStatus | null> {
+/** What the local database currently holds. */
+export async function localStatus(): Promise<LocalStatus | null> {
   if (!isDesktop()) return null;
   try {
-    return await invoke<DbStatus>('db_status');
+    return await invoke<LocalStatus>('local_status');
   } catch {
     return null;
+  }
+}
+
+/**
+ * Copy the Atlas data into the local database — once, then Atlas is done.
+ *
+ * Replaces local accounts and lists, so it refuses to run over existing data
+ * unless `force` is set.
+ */
+export async function importFromAtlas(
+  force = false,
+): Promise<{ ok: boolean; error?: string; report?: ImportReport }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return { ok: true, report: await invoke<ImportReport>('import_from_atlas', { force }) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -279,7 +304,7 @@ export async function saveLists(
 /** Which DOP credentials the app would use, and where they come from. */
 export interface DopCredentialStatus {
   username: string;
-  source: 'env' | 'config' | 'atlas';
+  source: 'env' | 'local' | 'config' | 'atlas';
   has_password: boolean;
   atlas_available: boolean;
   detail?: string;

@@ -290,7 +290,13 @@ pub async fn fetch_status(app: &AppHandle) -> DbStatus {
 pub async fn fetch_accounts(app: &AppHandle) -> Result<Vec<Value>, String> {
     let cfg =
         load_db_config(Some(app)).ok_or("No MONGO_URI configured (add it to src-tauri/.env).")?;
-    let client = connect(&cfg).await?;
+    fetch_accounts_with(&cfg).await
+}
+
+/// The query itself, taking a config so the import can be exercised without an
+/// app handle.
+pub async fn fetch_accounts_with(cfg: &DbConfig) -> Result<Vec<Value>, String> {
+    let client = connect(cfg).await?;
     let mut cursor = client
         .database(&cfg.db)
         .collection::<Document>(&cfg.collection)
@@ -480,7 +486,9 @@ pub const USERS_COLLECTION: &str = "users";
 pub enum CredentialSource {
     /// `DOP_USERNAME` / `DOP_PASSWORD` in the environment or a `.env`.
     Env,
-    /// The app-config `credentials.json`.
+    /// The local database — the normal case.
+    Local,
+    /// The older app-config `credentials.json`.
     Config,
     /// The `users` collection in Atlas, decrypted with `FERNET_KEY`.
     Atlas,

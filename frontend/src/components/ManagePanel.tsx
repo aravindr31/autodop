@@ -11,7 +11,8 @@ import { notify } from '../lib/toast';
 import {
   saveCredentials,
   useDesktop,
-  dbStatus,
+  localStatus,
+  importFromAtlas,
   loadAccountsFromDb,
   loadLists,
   saveLists,
@@ -20,7 +21,7 @@ import {
   setScraperPath,
   clearScraperPath,
 } from '../lib/bridge';
-import type { DbStatus, DopCredentialStatus, SavedCredentials, ScraperLocation } from '../lib/bridge';
+import type { LocalStatus, DopCredentialStatus, SavedCredentials, ScraperLocation } from '../lib/bridge';
 import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database } from 'lucide-react';
 import { Button, Pill } from './ui';
 
@@ -234,22 +235,13 @@ function DesktopSection(): React.ReactElement {
             </Button>
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
-            Stored encrypted with <code className="font-mono">FERNET_KEY</code> — the same cipher and
-            key as the copy in Atlas — in this app&rsquo;s config folder, readable only by your user.
-            It takes priority over the Atlas copy, so a change here applies immediately even while
-            the Atlas role is read-only.
+            Stored encrypted with <code className="font-mono">FERNET_KEY</code> in this app&rsquo;s own
+            database on this machine, readable only by your user. Nothing is sent anywhere.
           </p>
-          {outcome && !outcome.atlas_updated ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-amber-700">
-              The Atlas copy still holds the previous password
-              {outcome.atlas_note ? <> — {outcome.atlas_note}</> : null}. That is fine while this
-              Mac is the only machine running the app; widen the Atlas role to read-write if you
-              want the database copy updated too.
-            </p>
-          ) : null}
-          {outcome?.atlas_updated ? (
+          {outcome ? (
             <p className="mt-2 text-[11px] leading-relaxed text-emerald-700">
-              Updated in Atlas as well, so every machine picks it up.
+              Stored encrypted — saved in{' '}
+              <code className="font-mono">{outcome.location || 'autodop.db'}</code>.
             </p>
           ) : null}
           {info && !info.scraper_present ? (
@@ -443,22 +435,27 @@ function ScraperSection(): React.ReactElement {
   );
 }
 
+/**
+ * The local database — one SQLite file on this machine.
+ *
+ * Nothing is shared with anyone else, so there is no connection to check, no
+ * role to grant, and no read-only caveat. Atlas appears here only as the
+ * one-time import source for the data this app started out with.
+ */
 function DatabaseSection(): React.ReactElement {
   const { ready } = useDesktop();
   const shown = useStore((s) => s.accounts.length);
-  const [status, setStatus] = useState<DbStatus | null>(null);
+  const [status, setStatus] = useState<LocalStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmingImport, setConfirmingImport] = useState(false);
 
-  const check = async () => {
-    setBusy(true);
-    setStatus(await dbStatus());
-    setBusy(false);
-  };
+  const check = useCallback(async () => {
+    setStatus(await localStatus());
+  }, []);
 
   useEffect(() => {
     if (ready) void check();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+  }, [ready, check]);
 
   const reload = async () => {
     setBusy(true);
@@ -482,7 +479,7 @@ function DatabaseSection(): React.ReactElement {
       return;
     }
     useStore.getState().setLists(res.lists, res.activeId);
-    notify(`Loaded ${res.lists.length} list(s) from Atlas`, 'success');
+    notify(`Loaded ${res.lists.length} list(s)`, 'success');
   };
 
   const pushLists = async () => {
@@ -491,92 +488,131 @@ function DatabaseSection(): React.ReactElement {
     const res = await saveLists(store.lists, store.activeListId);
     setBusy(false);
     if (!res.ok || !res.lists) {
-      const message = res.error ?? 'Saving lists failed';
-      // Atlas phrasing when the user lacks write privileges.
-      notify(
-        /not allowed to do action/i.test(message)
-          ? `Atlas refused the write — this user is read-only. Grant readWrite on the ${status?.db ?? 'accounts'} database.`
-          : message,
-        'error',
-      );
+      notify(res.error ?? 'Saving lists failed', 'error');
       return;
     }
     // Adopt the stored ids so the next save updates instead of duplicating.
-    // Ids can change (a list is matched by name when it has no ObjectId yet),
-    // so follow the active list across by name rather than by id.
+    // Ids can change (a list is matched by name when it has no id yet), so
+    // follow the active list across by name rather than by id.
     const activeName = store.lists.find((list) => list.id === store.activeListId)?.name;
     const activeId = res.lists.find((list) => list.name === activeName)?.id;
     useStore.getState().setLists(res.lists, activeId);
-    notify(`Saved ${res.lists.length} list(s) to Atlas`, 'success');
+    notify(`Saved ${res.lists.length} list(s)`, 'success');
+    void check();
+  };
+
+  const runImport = async (force: boolean) => {
+    setBusy(true);
+    const res = await importFromAtlas(force);
+    setBusy(false);
+    setConfirmingImport(false);
+    if (!res.ok) {
+      notify(res.error ?? 'Import failed', 'error');
+      return;
+    }
+    const report = res.report;
+    notify(
+      `Imported ${report?.accounts ?? 0} accounts, ${report?.lists ?? 0} lists` +
+        (report?.credentials ? ', and the DOP password' : ''),
+      'success',
+    );
+    for (const warning of report?.warnings ?? []) notify(warning, 'error');
+    // Show it immediately rather than waiting for a restart.
+    const accounts = await loadAccountsFromDb();
+    if (accounts.ok && accounts.accounts) useStore.getState().setAccounts(accounts.accounts);
+    const lists = await loadLists();
+    if (lists.ok && lists.lists) useStore.getState().setLists(lists.lists, lists.activeId);
     void check();
   };
 
   return (
-    <Section title="Database (MongoDB Atlas)">
+    <Section title="Local database">
       {!ready ? (
         <p className="text-xs text-slate-500">Available in the desktop app only.</p>
       ) : (
         <>
           <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-            {status?.connected ? (
-              <>
-                <Pill tone="positive"><Database className="h-3 w-3" />connected</Pill>
-                <span className="font-mono">{status.db}.{status.collection}</span>
-                {typeof status.count === 'number' ? (
-                  <span>· {status.count.toLocaleString('en-IN')} docs</span>
-                ) : null}
-                <span>· showing {shown.toLocaleString('en-IN')}</span>
-              </>
-            ) : (
-              <>
-                <Pill tone="neutral">{status?.configured ? 'configured' : 'not configured'}</Pill>
-                <span>{status?.error ?? 'Checking…'}</span>
-              </>
-            )}
+            <Pill tone={status?.error ? 'neutral' : 'positive'}>
+              <Database className="h-3 w-3" />
+              {(status?.accounts ?? 0).toLocaleString('en-IN')} accounts
+            </Pill>
+            <span>
+              · {status?.lists ?? 0} lists · {status?.entries ?? 0} in lists · showing{' '}
+              {shown.toLocaleString('en-IN')}
+            </span>
           </div>
+          {status?.path ? (
+            <p className="mb-2 break-all font-mono text-[11px] text-slate-400">{status.path}</p>
+          ) : null}
+          {status?.error ? (
+            <p className="mb-2 text-[11px] text-rose-600">{status.error}</p>
+          ) : null}
+          <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+            {status?.has_credentials ? (
+              <><Pill tone="positive">DOP password stored</Pill> encrypted in this file.</>
+            ) : (
+              <><Pill tone="neutral">no DOP password yet</Pill> add one below.</>
+            )}
+          </p>
           <div className="flex gap-2">
-            <Button variant="secondary" className="!w-full" disabled={busy} onClick={() => void check()}>
-              Check connection
-            </Button>
-            <Button variant="primary" className="!w-full" disabled={busy || !status?.connected} onClick={() => void reload()}>
+            <Button variant="secondary" className="!w-full" disabled={busy} onClick={() => void reload()}>
               Reload accounts
             </Button>
-          </div>
-          <div className="mt-2 flex gap-2">
-            <Button variant="secondary" className="!w-full" disabled={busy || !status?.connected} onClick={() => void pullLists()}>
+            <Button variant="secondary" className="!w-full" disabled={busy} onClick={() => void pullLists()}>
               Load lists
             </Button>
-            <Button
-              variant="secondary"
-              className="!w-full"
-              disabled={busy || !status?.connected}
-              onClick={() => void pushLists()}
-              title={
-                status && status.writable === false
-                  ? `Ready to use — Atlas will refuse it until this user gets readWrite (now: ${(status.roles ?? []).join(', ') || 'no roles'})`
-                  : undefined
-              }
-            >
-              Save lists to Atlas
+          </div>
+          <div className="mt-2">
+            <Button variant="primary" className="!w-full" disabled={busy} onClick={() => void pushLists()}>
+              Save lists
             </Button>
           </div>
-          {status?.connected && status.writable === false ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-              Saving is wired up and ready to use. This Atlas user is currently{' '}
-              <strong>read-only</strong> ({(status.roles ?? []).join(', ') || 'no roles'}), so Atlas will
-              refuse the write until you grant <code className="font-mono">readWrite</code> on the{' '}
-              <code className="font-mono">{status.db}</code> database.
-            </p>
-          ) : (
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-              Lists are read from and written to <code className="font-mono">savedList</code>. Saving only
-              upserts the lists you have — nothing in Atlas is ever deleted.
-            </p>
-          )}
+          {status?.atlas_available ? (
+            <div className="mt-3 border-t border-slate-100 pt-2">
+              <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+                {status.atlas_imported_at ? (
+                  <>
+                    Imported from Atlas on{' '}
+                    <span className="font-mono">{status.atlas_imported_at}</span>. Running it again
+                    replaces the local accounts and lists with the Atlas copy.
+                  </>
+                ) : (
+                  <>
+                    Atlas still holds the data this app started with. Import it once — accounts,
+                    lists, and the DOP password re-encrypted with this machine&rsquo;s own key — and
+                    nothing here depends on Atlas afterwards.
+                  </>
+                )}
+              </p>
+              {confirmingImport ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] text-rose-700">
+                    Replace the local accounts and lists with the Atlas copy?
+                  </span>
+                  <Button variant="danger" size="sm" disabled={busy} onClick={() => void runImport(true)}>
+                    Yes, import
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => setConfirmingImport(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="secondary"
+                  className="!w-full"
+                  disabled={busy}
+                  onClick={() =>
+                    (status.accounts > 0 ? setConfirmingImport(true) : void runImport(false))
+                  }
+                >
+                  <Database className="h-4 w-4" />Import from Atlas
+                </Button>
+              )}
+            </div>
+          ) : null}
           <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-            URI comes from <code className="font-mono">src-tauri/.env</code> (gitignored) or the{' '}
-            <code className="font-mono">MONGO_URI</code> env var. Override the target with{' '}
-            <code className="font-mono">MONGO_DB</code> / <code className="font-mono">MONGO_COLLECTION</code>.
+            One SQLite file on this machine, owned by this app. Nothing is shared with anyone else, so
+            there is no connection to check and no role to grant.
           </p>
         </>
       )}
@@ -600,11 +636,13 @@ function CredentialSourceNote(): React.ReactElement {
   if (!status) return <span className="hidden" />;
 
   const source =
-    status.source === 'atlas'
-      ? 'Atlas (users → UserInfo)'
-      : status.source === 'env'
-        ? 'DOP_USERNAME / DOP_PASSWORD'
-        : "this app's config file";
+    status.source === 'local'
+      ? "this app's database"
+      : status.source === 'atlas'
+        ? 'Atlas (users → UserInfo)'
+        : status.source === 'env'
+          ? 'DOP_USERNAME / DOP_PASSWORD'
+          : "this app's config file";
 
   return (
     <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
@@ -618,7 +656,7 @@ function CredentialSourceNote(): React.ReactElement {
         <>
           <Pill tone="neutral">no credentials yet</Pill>{' '}
           {status.detail ??
-            'Save them below, or add FERNET_KEY to src-tauri/.env so they can be read from Atlas.'}
+            'Save them below — they go into this app’s own database, encrypted.'}
         </>
       )}
     </p>

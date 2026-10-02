@@ -165,114 +165,117 @@ soon as the window moves on.
   (`%LOCALAPPDATA%\in.aravind.autodop\logs` on Windows). One file per run,
   timestamped, with the password redacted.
 
-## Database (MongoDB Atlas)
+## Data
 
-Accounts are read from Atlas by the Rust backend — the webview never sees the
-connection string.
+Everything this app owns lives in **one SQLite file on this machine** — accounts,
+lists, the DOP password, and a run history. Nothing is shared, so there is no
+connection string to distribute, no server to run, and no database role to grant.
+
+- macOS: `~/Library/Application Support/in.aravind.autodop/autodop.db`
+- Windows: `%APPDATA%\in.aravind.autodop\autodop.db`
+- Linux: `~/.config/in.aravind.autodop/autodop.db`
+
+The exact path is shown in **Manage → Local database**.
+
+| Table | Holds |
+| --- | --- |
+| `accounts` | one row per account holder; `number` is unique |
+| `lists` | the lists (`A`…`Z`), one of them flagged `active` |
+| `list_entries` | which accounts are in which list, in order, with the rebate |
+| `credentials` | the DOP id and a Fernet-encrypted password |
+| `runs` | one row per Generate run — what was attempted and how it ended |
+| `meta` | the schema version, and whether the Atlas import has run |
+
+`list_entries` references `accounts` and `lists` with `ON DELETE CASCADE`, so
+deleting an account takes it out of every list, and deleting a list takes its
+entries with it. `rebate` defaults to `0`; `1` is a real value meaning "skip the
+rebate step" in `scraper.py`, and it survives every round trip.
+
+**Manage → Local database** shows the counts and the file path, with **Reload
+accounts**, **Load lists** and **Save lists**. A save upserts by id and falls back
+to matching on the name, so saving twice updates instead of duplicating.
+
+### Importing the data this app started with
+
+The accounts, lists and DOP password began life in MongoDB Atlas. Move them
+across once, from **Manage → Local database → Import from Atlas**. It:
+
+- reads Atlas read-only — the role never needed to be writable for this,
+- replaces the local accounts and lists, so it asks for confirmation when the
+  local database already has accounts,
+- re-encrypts the DOP password under **this machine's** own key,
+- records when it ran, which the panel then shows.
+
+Nothing depends on Atlas afterwards. You can run and check it without the app:
 
 ```bash
-cp src-tauri/.env.example src-tauri/.env   # then paste your URI
+cd src-tauri && cargo run --example import_probe               # throwaway database
+cd src-tauri && cargo run --example import_probe -- ~/t.db     # into a real file
 ```
 
-**Verified against your cluster** (`cargo run --example db_probe`):
-
-| Database | Collection | Docs | Contents |
-| --- | --- | --- | --- |
-| `accounts` | `accountHolders` | 149 | the account documents ← accounts come from here |
-| `accounts` | `savedList` | 26 | lists (`A`…`Z`), each with `{id, rebate}` per account |
-| `accounts` | `users` | 1 | login record |
-| `accounts` | `admin` | 1 | — |
-| `accounts` | `list` | 0 | empty |
-
-`accounts.accounts` is **empty** — the collection is `accountHolders`, which is
-the default. Document fields confirmed as `_id, Number, Name, Denomination,
-CNumber, Ref_Number, addedIn`.
-
-**Manage (gear) → Database** shows connection status plus **Reload accounts**,
-**Load lists** and **Save lists to Atlas**. On launch the app loads accounts from
-Atlas when reachable, otherwise it keeps the persisted/seeded set.
-
-### Lists
-
-List documents are `{_id, listName, active, accounts: [{id: ObjectId, rebate}]}`.
-
-- **Load lists** replaces the local lists with the stored ones and adopts the
-  list marked `active`.
-- **Save lists to Atlas** upserts the lists you have and adopts the stored ids,
-  so a later save updates in place instead of duplicating. **Nothing is ever
-  deleted** — lists you removed locally stay in Atlas.
-- Documents are matched by `_id` when it is a real ObjectId, otherwise by
-  `listName` (local ids are UUIDs, so this is what updates the existing A–Z
-  rows rather than inserting new ones).
-- `rebate` rides along per account, so **Generate (DOP)** sends the stored value
-  when there is one and falls back to `0` — the Streamlit UI's default.
-
-Your 26 lists are currently **empty shells** — every one has `accounts: []`, so
-there is no membership or rebate data to import yet. `A` is the one flagged
-`active`.
-
-### Your Atlas user is read-only
-
-The probe reports the authenticated roles, and this connection is
-**`readAnyDatabase`** — reads work, writes do not. Atlas refuses:
+Last run of that probe against the real cluster:
 
 ```
-user is not allowed to do action [update] on [accounts.savedList]
+imported: 148 accounts, 26 lists, 0 entries, credentials=true
+lists: 26 (active=Some("A"))
+stored credential: DOP.MI6855840100003 (token 100 chars)
 ```
 
-So **Load lists** and **Reload accounts** work today, and **Save lists to Atlas**
-is live in the UI and ready to use — it will simply be refused by Atlas until you
-grant write access. Read-only is a deliberate starting point here; switch the
-role when you're ready.
+All 26 lists are empty shells in Atlas (`accounts: []`), so there is no membership
+or rebate data to bring across — only the account master and the password.
 
-The refusal is handled honestly: the toast says the user is read-only and names
-the database to grant `readWrite` on, rather than showing the raw Atlas error.
-Nothing is half-applied — a rejected write changes nothing.
+### What is still read from Atlas
 
-`db_status` returns `writable` and `roles`, so the panel can state this up front
-instead of leaving you to guess why a save failed.
+Only that import. `MONGO_URI` and `FERNET_KEY` are needed for it and nothing
+else; with no `MONGO_URI` the app never touches the network at all. Credential
+resolution, most explicit first:
+
+1. `DOP_USERNAME` / `DOP_PASSWORD` (environment or a `.env`)
+2. the local database
+3. the older `credentials.json`, still honoured so an existing install keeps working
+4. the Atlas copy — a read-only fallback that exists only until the import has run
 
 ### Overrides
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `MONGO_URI` | — | Atlas connection string (required) |
-| `MONGO_DB` | `accounts` | database name |
+| `MONGO_URI` | — | Atlas connection string — **import source only** |
+| `MONGO_DB` | `accounts` | database name for the import |
 | `MONGO_COLLECTION` | `accountHolders` | account documents collection |
-| `MONGO_LISTS_COLLECTION` | `savedList` | lists collection (probe/test override) |
-| `FERNET_KEY` | — | decrypts `users.UserInfo.DOP_password` (required for Atlas credentials) |
+| `MONGO_LISTS_COLLECTION` | `savedList` | lists collection (probe override) |
+| `FERNET_KEY` | generated on first use | encrypts the stored DOP password, and opens the Atlas copy |
 | `AUTODOP_ENV_FILE` | — | explicit path to a `.env` to read |
 
 Environment variables win over the `.env` file. `src-tauri/.env` is gitignored;
 `src-tauri/.env.example` is the committed template.
 
-### Probing the cluster
+### Probing
 
 ```bash
-cd src-tauri && cargo run --example db_probe     # read-only; prints field names, never values
-MONGO_LISTS_COLLECTION=savedList_probe cargo run --example db_probe   # adds a write round-trip
+cd src-tauri && cargo run --example db_schema      # Atlas collections, indexes, field names
+cd src-tauri && cargo run --example db_probe       # Atlas connectivity + credential check
+cd src-tauri && cargo run --example import_probe   # the import, into a throwaway database
+cd src-tauri && cargo run --example build_info     # version + build stamp
 ```
 
-The write probe only ever touches the collection named by
-`MONGO_LISTS_COLLECTION`, and drops it again afterwards — `savedList` is never
-modified by it.
+None of them print a value — field names, counts and indexes only.
 
-### How the DOP password is decrypted
+### How the DOP password is encrypted
 
-The old Streamlit app encrypted it with Python's `cryptography.fernet.Fernet`
-(`main.py` → `settings.decrypt_dop_passwd`), so only a Fernet-compatible
-decryptor can read that ciphertext — no other cipher opens it.
-
-`src-tauri/src/crypt.rs` implements the Fernet framing on the standard RustCrypto
-primitives (`aes`, `cbc`, `hmac`, `sha2`). The `fernet` crate would do the same
-job but links **OpenSSL**, which this project avoids: it already uses rustls and
-is meant to build on both macOS and Windows.
+The stored password is a Fernet token, so the old Streamlit app could read it and
+so can this one. `src-tauri/src/crypt.rs` implements the Fernet framing on the
+standard RustCrypto primitives (`aes`, `cbc`, `hmac`, `sha2`) — in both
+directions. The `fernet` crate would do the same job but links **OpenSSL**, which
+this project avoids: it already uses rustls and is meant to build on macOS and
+Windows alike.
 
 It is verified against the reference implementation rather than assumed.
 `src-tauri/src/crypt_vectors.rs` holds tokens generated by Python's
-`cryptography` under a throwaway key; the tests decrypt them and also assert that
-a wrong key, a tampered token, a truncated token and non-base64 garbage are all
-rejected. Regenerate with `python3 src-tauri/scripts/gen_fernet_vectors.py`.
+`cryptography` under a throwaway key; the tests decrypt them, round-trip their own,
+and assert that a wrong key, a tampered token, a truncated token and non-base64
+garbage are all rejected. A token this code writes also decrypts under Python's
+`Fernet` — `cargo run --example fernet_probe` prints one to check with.
+Regenerate the vectors with `python3 src-tauri/scripts/gen_fernet_vectors.py`.
 
 No TTL is enforced, matching `Fernet.decrypt`, whose default is `ttl=None` — a
 credential stored long ago must keep working.

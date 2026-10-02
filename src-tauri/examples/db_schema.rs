@@ -103,7 +103,14 @@ fn main() {
                             if unique { " (unique)" } else { "" }
                         ));
                     }
-                    println!("    indexes: {}", if shown.is_empty() { "none".into() } else { shown.join(" | ") });
+                    println!(
+                        "    indexes: {}",
+                        if shown.is_empty() {
+                            "none".into()
+                        } else {
+                            shown.join(" | ")
+                        }
+                    );
                 }
                 Err(error) => println!("    indexes: unavailable ({error})"),
             }
@@ -126,7 +133,11 @@ fn main() {
                         for (path, kind) in fields {
                             // An array's element count differs per document; it is
                             // not part of the schema.
-                            let kind = if kind.starts_with("array(") { "array".to_string() } else { kind };
+                            let kind = if kind.starts_with("array(") {
+                                "array".to_string()
+                            } else {
+                                kind
+                            };
                             println!("      {path}: {kind}");
                         }
                     }

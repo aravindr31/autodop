@@ -24,6 +24,7 @@ base64 = "0.23.1"
 aes = "0.8"
 cbc = { version = "0.1", features = ["block-padding"] }
 getrandom = "0.2"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [profile.release]
 codegen-units = 1

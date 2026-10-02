@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../lib/store';
 import { formatINR } from '../lib/format';
 import { onNotify, notify } from '../lib/toast';
-import { dbStatus, isDesktop, loadAccountsFromDb } from '../lib/bridge';
+import { localStatus, isDesktop, loadAccountsFromDb } from '../lib/bridge';
 import { SidebarPanel } from './Sidebar';
 import Sidebar from './Sidebar';
 import Browser from './Browser';
@@ -58,21 +58,22 @@ export default function App(): React.ReactElement {
     [],
   );
 
-  // In the desktop app, source accounts from Atlas when it is reachable;
-  // otherwise the persisted/seeded accounts stay in place.
+  // In the desktop app, source accounts from the local database once it has
+  // any; until then the persisted/seeded accounts stay in place, so a fresh
+  // install is not an empty screen.
   useEffect(() => {
     if (!isDesktop()) return;
     let cancelled = false;
     void (async () => {
-      const status = await dbStatus();
-      if (cancelled || !status?.connected) return;
+      const status = await localStatus();
+      if (cancelled || !status || status.error || status.accounts === 0) return;
       const res = await loadAccountsFromDb();
       if (cancelled || !res.ok || !res.accounts) {
         if (!cancelled && res.error) notify(`Database load failed: ${res.error}`, 'error');
         return;
       }
       useStore.getState().setAccounts(res.accounts);
-      notify(`Loaded ${res.accounts.length} accounts from ${status.db}.${status.collection}`, 'success');
+      notify(`Loaded ${res.accounts.length} accounts from the local database`, 'success');
     })();
     return () => {
       cancelled = true;

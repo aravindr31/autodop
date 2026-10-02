@@ -270,6 +270,52 @@ export async function localStatus(): Promise<LocalStatus | null> {
   }
 }
 
+/** What a backup or restore did, as reported by the backend. */
+export interface BackupOutcome {
+  accounts: number;
+  lists: number;
+  entries: number;
+  has_credentials: boolean;
+  /** The backup file written (export), or the safety copy of the replaced database (restore). */
+  previous?: string;
+}
+
+/**
+ * Write a full backup of the local database to `path`.
+ *
+ * The file is a complete SQLite copy — accounts, lists, the encrypted DOP
+ * password, the login hash and salt. It only opens with the login password
+ * that key was derived from, so a backup is the file *plus* that password.
+ */
+export async function exportBackup(
+  path: string,
+): Promise<{ ok: boolean; error?: string; outcome?: BackupOutcome }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return { ok: true, outcome: await invoke<BackupOutcome>('export_backup', { path }) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Replace the local database with the backup at `path`.
+ *
+ * The replaced database is kept as `autodop.db.pre-restore-<stamp>` next to
+ * the live file, and you are signed out — the restored file may expect a
+ * different login password.
+ */
+export async function importBackup(
+  path: string,
+): Promise<{ ok: boolean; error?: string; outcome?: BackupOutcome }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return { ok: true, outcome: await invoke<BackupOutcome>('import_backup', { path }) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * Copy the Atlas data into the local database — once, then Atlas is done.
  *

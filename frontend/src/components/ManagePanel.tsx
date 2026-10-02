@@ -20,9 +20,11 @@ import {
   scraperLocation,
   setScraperPath,
   clearScraperPath,
+  exportBackup,
+  importBackup,
 } from '../lib/bridge';
 import type { LocalStatus, DopCredentialStatus, SavedCredentials, ScraperLocation } from '../lib/bridge';
-import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database } from 'lucide-react';
+import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database, Save, Upload } from 'lucide-react';
 import { Button, Pill } from './ui';
 
 const FIELD =
@@ -442,6 +444,135 @@ function ScraperSection(): React.ReactElement {
 }
 
 /**
+ * Backup / restore — a copy of the SQLite file, made with SQLite's own
+ * backup API so WAL pages are not missed.
+ *
+ * The backup carries the encrypted DOP password and the login hash, and
+ * neither is readable without the login password the key was derived from.
+ * That is the caveat, said plainly: the backup is the file plus you
+ * remembering the password.
+ */
+function BackupSection(): React.ReactElement {
+  const { ready } = useDesktop();
+  const [exportPath, setExportPath] = useState('');
+  const [importPath, setImportPath] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [confirmingRestore, setConfirmingRestore] = useState(false);
+
+  const runExport = async () => {
+    if (!exportPath.trim()) {
+      notify('Enter a full path for the backup file', 'error');
+      return;
+    }
+    setBusy(true);
+    const res = await exportBackup(exportPath.trim());
+    setBusy(false);
+    if (!res.ok || !res.outcome) {
+      notify(res.error ?? 'Backup failed', 'error');
+      return;
+    }
+    notify(
+      `Backed up ${res.outcome.accounts} accounts, ${res.outcome.lists} list(s)` +
+        (res.outcome.has_credentials ? ' and the DOP password' : '') +
+        ` to ${res.outcome.previous}`,
+      'success',
+    );
+  };
+
+  const runRestore = async () => {
+    setBusy(true);
+    const res = await importBackup(importPath.trim());
+    setBusy(false);
+    setConfirmingRestore(false);
+    if (!res.ok || !res.outcome) {
+      notify(res.error ?? 'Restore failed', 'error');
+      return;
+    }
+    setImportPath('');
+    notify(
+      `Restored ${res.outcome.accounts} accounts, ${res.outcome.lists} list(s)` +
+        (res.outcome.has_credentials ? ' and the DOP password' : ''),
+      'success',
+    );
+    if (res.outcome.previous) {
+      notify(`The replaced database was kept at ${res.outcome.previous}`, 'info');
+    }
+    const accounts = await loadAccountsFromDb();
+    if (accounts.ok && accounts.accounts) useStore.getState().setAccounts(accounts.accounts);
+    const lists = await loadLists();
+    if (lists.ok && lists.lists) useStore.getState().setLists(lists.lists, lists.activeId);
+  };
+
+  return (
+    <Section title="Backup & restore">
+      {ready ? (
+        <>
+          <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+            One SQLite file holds everything on this machine. The backup carries
+            the DOP password encrypted with your login password —
+            <strong> it only opens together with that password</strong>. On another
+            machine, sign in with the same password first.
+          </p>
+          <input
+            aria-label="Backup destination path"
+            value={exportPath}
+            onChange={(e) => setExportPath(e.currentTarget.value)}
+            className={FIELD}
+            placeholder="~/Backups/autodop-backup.db"
+          />
+          <Button
+            variant="secondary"
+            className="!mt-2 !w-full"
+            disabled={busy}
+            onClick={() => void runExport()}
+          >
+            <Save className="h-4 w-4" />Back up now
+          </Button>
+          <div className="mt-3 border-t border-slate-100 pt-2">
+            <input
+              aria-label="Backup path to restore from"
+              value={importPath}
+              onChange={(e) => { setImportPath(e.currentTarget.value); setConfirmingRestore(false); }}
+              className={FIELD}
+              placeholder="Path to an autodop backup .db"
+            />
+            {confirmingRestore ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-rose-700">
+                  Replace the live database with this backup?
+                </span>
+                <Button variant="danger" size="sm" disabled={busy} onClick={() => void runRestore()}>
+                  Yes, restore
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => setConfirmingRestore(false)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="secondary"
+                className="!mt-2 !w-full"
+                disabled={busy || !importPath.trim()}
+                onClick={() => setConfirmingRestore(true)}
+              >
+                <Upload className="h-4 w-4" />Restore from backup
+              </Button>
+            )}
+            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+              A restore keeps the replaced database as
+              <code className="font-mono"> autodop.db.pre-restore-…</code> next to the live
+              file, and signs you out — sign back in with the password the backup expects.
+            </p>
+          </div>
+        </>
+      ) : (
+        <p className="text-xs text-slate-500">Available in the desktop app only.</p>
+      )}
+    </Section>
+  );
+}
+
+/**
  * The local database — one SQLite file on this machine.
  *
  * Nothing is shared with anyone else, so there is no connection to check, no
@@ -694,6 +825,7 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
           <DeleteAccountSection />
           <ChangePasswordSection />
           <DatabaseSection />
+          <BackupSection />
           <DesktopSection />
           <ScraperSection />
           <BuildSection />

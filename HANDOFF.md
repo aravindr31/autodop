@@ -106,16 +106,38 @@ Not proven:
 
 ## Open work
 
-1. **Backup / restore** — requested, not started. Must include the `key`-less
-   credential caveat: the DB is useless without the login password, so the backup
-   is "database + you knowing the password". Decide whether the app login and the
-   submit endpoint (localStorage only) travel with it.
-2. **Remove Atlas entirely** — `db.rs` and the `mongodb` dependency are still
+1. **Remove Atlas entirely** — `db.rs` and the `mongodb` dependency are still
    present purely for the import (~100 MB of build deps). Two read call sites in
    `lib.rs`; the rest is deletion. Do this only once the data is confirmed local
    (it is, on this machine).
-3. **Local multi-account** — mentioned as a possibility, not started. Would need
+2. **Local multi-account** — mentioned as a possibility, not started. Would need
    an owner column on `accounts` and `lists`. Cheaper now, while lists are empty.
+3. **Backup/restore via a real file dialog** — implemented with typed paths; a
+   native picker would need `tauri-plugin-dialog`.
+
+## Backup / restore (done)
+
+`Manage → Backup & restore` (`backup.rs` + `export_backup` / `import_backup` in
+`lib.rs`). The backup is a complete SQLite file made with SQLite's own backup
+API — required because the store runs in WAL and a raw `cp` can miss `-wal`
+pages. It carries accounts, lists, the encrypted DOP password, the login hash
+and the KDF salt. The standing caveat: **the backup is the file plus you
+remembering the login password** — the DOP password key is derived from it, so
+restoring on another machine means signing in with that same password.
+
+Restore refuses non-AutoDOP files (`meta` table + `integrity_check` required),
+keeps the replaced database as `autodop.db.pre-restore-<stamp>` next to the live
+file, removes stale `-wal`/`-shm` sidecars, and signs you out (the in-memory key
+belongs to the old login password). Exports refuse to overwrite an existing file
+that is not an AutoDOP database. Verified by `cargo test` (backup module, 4
+tests) and the roundtrip probe:
+
+    cd src-tauri && cargo run --example backup_probe            # full seed→backup→damage→restore→verify
+    cargo run --example backup_probe -- export /path/to.db     # real backup of the live store
+    cargo run --example backup_probe -- inspect /path/to.db    # what a backup holds
+
+A real export of the live database exists at `~/Backups/autodop-backup-2026-10-02.db`
+(148 accounts, 26 lists, credential).
 
 ## Facts worth knowing
 

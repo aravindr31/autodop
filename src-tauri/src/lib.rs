@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+pub mod backup;
 pub mod crypt;
 pub mod db;
 pub mod store;
@@ -1207,6 +1208,123 @@ fn save_lists(app: AppHandle, lists: Vec<db::InputList>) -> Result<Vec<db::DbLis
     open_store(&app)?.save_lists(&lists)
 }
 
+// --------------------------------------------------------------------------- //
+// backup / restore                                                            //
+// --------------------------------------------------------------------------- //
+
+/// What a backup command did: the counts in the file that was written or
+/// restored, and — for a restore — where the replaced database was kept.
+#[derive(Debug, Serialize)]
+pub struct BackupOutcome {
+    pub accounts: i64,
+    pub lists: i64,
+    pub entries: i64,
+    pub has_credentials: bool,
+    /// Only set by a restore: the safety copy of the replaced database.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+}
+
+/// `~/…` and bare `~` expand to the home directory; anything else is taken
+/// as given.
+fn expand_home(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// Write a backup of the live database to `path`.
+///
+/// The backup is a complete SQLite file produced by SQLite's own backup API
+/// (a plain copy can miss WAL pages). It carries the login hash, the KDF
+/// salt, and the encrypted DOP password — which is only readable with the
+/// login password it was derived from, so "backup" always means *file plus
+/// you remembering that password*.
+#[tauri::command]
+fn export_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> {
+    let destination = expand_home(&path);
+    if destination.extension().is_none() {
+        return Err("give the backup a file name, e.g. autodop-backup.db".into());
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    let live = store_path(&app)?;
+    let snapshot = backup::export(&live, &destination)?;
+    Ok(BackupOutcome {
+        accounts: snapshot.accounts,
+        lists: snapshot.lists,
+        entries: snapshot.entries,
+        has_credentials: snapshot.has_credentials,
+        previous: Some(destination.display().to_string()),
+    })
+}
+
+/// Replace the live database with the backup at `path`.
+///
+/// The current database is first written to `autodop.db.pre-restore-<stamp>`
+/// next to it, so a wrong choice is undoable by hand. Signing out is forced:
+/// the in-memory key was derived from the *previous* login password and will
+/// not open the restored file.
+#[tauri::command]
+fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> {
+    let source = expand_home(&path);
+    if !source.exists() {
+        return Err(format!("{} does not exist", source.display()));
+    }
+    let snapshot = backup::inspect(&source)?;
+    let live = store_path(&app)?;
+
+    // Safety copy of what is being replaced, before anything is touched.
+    let safety = live.with_extension(format!("db.pre-restore-{}", compact_timestamp(now_secs())));
+    backup::export(&live, &safety)?;
+    let previous = safety.display().to_string();
+
+    // The key in memory belongs to the old login password; drop it.
+    clear_unlocked_key(&app);
+
+    // Remove the live file and its WAL sidecars, then put the backup in place.
+    for sidecar in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(live.with_extension(format!("db{sidecar}")));
+    }
+    std::fs::copy(&source, &live)
+        .map_err(|error| format!("cannot restore over {}: {error}", live.display()))?;
+    for sidecar in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(live.with_extension(format!("db{sidecar}")));
+    }
+
+    // Read the result back through a real store; if the counts disagree the
+    // safety copy is still sitting next to it.
+    let store = open_store(&app)?;
+    let counts = store.counts()?;
+    if counts.accounts != snapshot.accounts
+        || counts.lists != snapshot.lists
+        || counts.entries != snapshot.entries
+    {
+        return Err(format!(
+            "restored file does not match the backup (expected {:?}, got {:?}); \
+             the replaced data was kept at {previous}",
+            snapshot, counts
+        ));
+    }
+    Ok(BackupOutcome {
+        accounts: counts.accounts,
+        lists: counts.lists,
+        entries: counts.entries,
+        has_credentials: snapshot.has_credentials,
+        previous: Some(previous),
+    })
+}
+
 /// What the one-time Atlas import moved across.
 #[derive(Debug, Serialize, Default)]
 pub struct ImportReport {
@@ -1391,6 +1509,8 @@ pub fn run() {
             load_accounts,
             load_lists,
             save_lists,
+            export_backup,
+            import_backup,
             scraper_location,
             set_scraper_path,
             clear_scraper_path

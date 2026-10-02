@@ -1,12 +1,3 @@
-/**
- * Main account display (spec §3.1): all accounts with live search (Name /
- * Number / CNumber / Ref_Number), client-side pagination, and a view-density
- * switch — 4 / 3 / 2 columns or a table. The choice is remembered.
- *
- * In the grid, the account number is the identity that matters (it is what
- * the portal pays against), so it leads the card and the CNumber is not
- * shown; the table view carries the less common columns.
- */
 import { useState } from 'react';
 import type { Account } from '../lib/types';
 import { useStore } from '../lib/store';
@@ -29,7 +20,7 @@ function rememberedView(): View {
   try {
     const raw = localStorage.getItem(VIEW_KEY);
     if (raw === '4' || raw === '3' || raw === '2' || raw === 'table') return raw;
-  } catch { /* private mode */ }
+  } catch {   }
   return '4';
 }
 
@@ -67,7 +58,7 @@ function AccountCard({ account }: { account: Account }): React.ReactElement {
   const store = useStore.getState();
   const id = account._id;
   const activeListId = useStore((s) => s.activeListId);
-  const inListName = useStore((s) => s.listNameOf(id)); // "" when not in any list
+  const inListName = useStore((s) => s.listNameOf(id));
   const inActiveList = useStore((s) => s.lists.find((l) => l.id === s.activeListId)?.accountIds.includes(id) ?? false);
 
   const add = () => {
@@ -90,7 +81,7 @@ function AccountCard({ account }: { account: Account }): React.ReactElement {
 
   return (
     <div className="flex flex-col rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-shadow hover:shadow-md">
-      {/* The account number is the identity — it leads, in full. */}
+      { }
       <div className="flex items-start justify-between gap-2">
         <p className="truncate font-mono text-[15px] font-semibold tracking-tight text-slate-900" title={account.Number}>
           {account.Number}
@@ -180,7 +171,7 @@ export default function Browser(): React.ReactElement {
 
   const changeView = (next: View) => {
     setView(next);
-    try { localStorage.setItem(VIEW_KEY, next); } catch { /* private mode */ }
+    try { localStorage.setItem(VIEW_KEY, next); } catch {   }
   };
 
   const matched = accounts.filter((a) => matchesQuery(a, query));
@@ -188,7 +179,7 @@ export default function Browser(): React.ReactElement {
   const current = Math.min(page, pageCount - 1);
   const slice = matched.slice(current * pageSize, (current + 1) * pageSize);
 
-  // Return to the first page whenever the filter narrows the result set.
+
   const changeQuery = (value: string) => {
     setQuery(value);
     setPage(0);

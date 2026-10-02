@@ -1,5 +1,3 @@
-//! Parse a real Deposit-Accounts PDF and show what the importer would take.
-//!     cargo run --example pdf_probe -- /path/to/Agent.pdf
 use std::path::PathBuf;
 
 fn main() {

@@ -1,12 +1,3 @@
-//! AutoDOP desktop backend.
-//!
-//! Runs the Astro frontend in a native webview and exposes commands the page
-//! calls with `invoke(...)`. The important one is [`generate_lists`], which runs
-//! `scraper.py` as a local subprocess — something a plain browser page cannot do.
-//!
-//! Credentials live in the OS app-config directory (or the environment), never
-//! in the webview's storage.
-
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs::File;
@@ -22,14 +13,9 @@ pub mod crypt;
 pub mod db;
 pub mod store;
 
-/// Selenium waits up to 360s for the DOP login alone; allow a long ceiling.
 const SCRAPER_TIMEOUT_SECS: u64 = 3600;
-/// Event name the frontend subscribes to for live scraper output.
-const PROGRESS_EVENT: &str = "scraper-progress";
 
-// --------------------------------------------------------------------------- //
-// types                                                                       //
-// --------------------------------------------------------------------------- //
+const PROGRESS_EVENT: &str = "scraper-progress";
 
 #[derive(Debug, Deserialize)]
 pub struct GenList {
@@ -50,8 +36,7 @@ pub struct GenResult {
     pub returncode: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<String>,
-    /// Where the full run log was written, so a failure can be inspected later
-    /// instead of vanishing with the progress area.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
 }
@@ -72,36 +57,30 @@ impl GenResult {
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
     pub desktop: bool,
-    /// App version, from `tauri.conf.json` — also the name of the installer.
+
     pub version: String,
-    /// `<short sha> <commit date>` for the build you are running.
+
     pub build: String,
     pub scraper: String,
     pub scraper_present: bool,
-    /// `chosen` | `env` | `sidecar` | `bundled` | `repo` | `cwd`.
+
     pub scraper_source: String,
-    /// `sidecar` (self-contained) | `script` (needs Python).
+
     pub scraper_kind: String,
     pub credentials: bool,
     pub python: String,
 }
 
-// --------------------------------------------------------------------------- //
-// paths + credentials                                                         //
-// --------------------------------------------------------------------------- //
-
-/// Where the runner was found, and where it came from.
 #[derive(Debug, Serialize, Clone)]
 pub struct ScraperLocation {
     pub path: String,
-    /// `chosen` | `env` | `sidecar` | `bundled` | `repo` | `cwd`.
+
     pub source: String,
-    /// `sidecar` (a self-contained executable) | `script` (needs Python).
+
     pub kind: String,
     pub present: bool,
 }
 
-/// A `.py` needs an interpreter; anything else is treated as a frozen helper.
 fn kind_of(path: &Path) -> &'static str {
     if path
         .extension()
@@ -113,8 +92,6 @@ fn kind_of(path: &Path) -> &'static str {
     }
 }
 
-/// Name of the packaged helper for this platform, e.g. `scraper-macos-arm64`.
-/// Produced by `npm run build:sidecar` — see the README.
 fn sidecar_name() -> String {
     let os = std::env::consts::OS;
     let arch = match std::env::consts::ARCH {
@@ -126,16 +103,11 @@ fn sidecar_name() -> String {
     format!("scraper-{os}-{arch}{suffix}")
 }
 
-/// The frozen helper inside a resource directory, if one was bundled.
 fn bundled_sidecar_in(resource_dir: &Path) -> Option<PathBuf> {
     let candidate = resource_dir.join("binaries").join(sidecar_name());
     candidate.is_file().then_some(candidate)
 }
 
-/// The bundled script inside a resource directory.
-///
-/// Tauri rewrites a `../` resource path into `_up_` while copying, so the file
-/// can end up at either spelling — accept both rather than guess.
 fn bundled_scraper_in(resource_dir: &Path) -> Option<PathBuf> {
     ["scraper.py", "_up_/scraper.py"]
         .iter()
@@ -143,10 +115,6 @@ fn bundled_scraper_in(resource_dir: &Path) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// Make sure a bundled executable can be launched.
-///
-/// Bundlers do not always carry the executable bit across, and a helper that is
-/// present but not runnable fails in a thoroughly confusing way.
 fn ensure_executable(path: &Path) {
     #[cfg(unix)]
     {
@@ -163,15 +131,7 @@ fn ensure_executable(path: &Path) {
     let _ = path;
 }
 
-/// Resolve `scraper.py`, most specific first:
-///
-/// 1. a path chosen in the UI (app-config `settings.json`)
-/// 2. `AUTODOP_SCRAPER` (environment or `.env`)
-/// 3. the copy bundled inside the app — so a shipped build needs no setup
-/// 4. the repo root, which only exists when running from source
-/// 5. the working directory
 fn locate_scraper(app: Option<&AppHandle>) -> ScraperLocation {
-    // (path, source, kind)
     let mut candidates: Vec<(PathBuf, &str, &str)> = Vec::new();
     let mut add = |path: PathBuf, source: &'static str| {
         let kind = kind_of(&path);
@@ -190,8 +150,6 @@ fn locate_scraper(app: Option<&AppHandle>) -> ScraperLocation {
     }
     if let Some(app) = app {
         if let Ok(dir) = app.path().resource_dir() {
-            // The frozen helper comes first: it needs no Python at all, which is
-            // the only configuration a fresh install can be expected to satisfy.
             if let Some(sidecar) = bundled_sidecar_in(&dir) {
                 add(sidecar, "sidecar");
             }
@@ -218,7 +176,6 @@ fn locate_scraper(app: Option<&AppHandle>) -> ScraperLocation {
         }
     }
 
-    // Nothing usable — report what was tried first so the UI can say so.
     let (path, source, kind) =
         candidates
             .first()
@@ -232,7 +189,6 @@ fn locate_scraper(app: Option<&AppHandle>) -> ScraperLocation {
     }
 }
 
-/// The app's own small settings file, next to `credentials.json`.
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -251,7 +207,6 @@ fn read_settings(app: &AppHandle) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// A `scraper.py` path chosen in the UI, if that file still exists.
 fn saved_scraper_override(app: &AppHandle) -> Option<PathBuf> {
     let value = read_settings(app)
         .get("scraper_path")?
@@ -265,7 +220,6 @@ fn saved_scraper_override(app: &AppHandle) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// Persist the chosen `scraper.py`, or drop the override to fall back.
 fn write_scraper_override(app: &AppHandle, path: Option<&str>) -> Result<(), String> {
     let file = settings_path(app)?;
     let mut settings = read_settings(app);
@@ -284,7 +238,6 @@ fn write_scraper_override(app: &AppHandle, path: Option<&str>) -> Result<(), Str
     std::fs::write(&file, body).map_err(|error| format!("cannot write {}: {error}", file.display()))
 }
 
-/// Python interpreter: env override, else `python` on Windows / `python3` elsewhere.
 fn python_bin() -> String {
     if let Ok(value) = std::env::var("AUTODOP_PYTHON") {
         if !value.trim().is_empty() {
@@ -298,11 +251,6 @@ fn python_bin() -> String {
     }
 }
 
-// --------------------------------------------------------------------------- //
-// run logs                                                                    //
-// --------------------------------------------------------------------------- //
-
-/// Seconds since the Unix epoch.
 pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -310,10 +258,6 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Format an epoch timestamp as RFC 3339 UTC.
-///
-/// Hand-rolled so the app does not carry a date library for one string; the
-/// civil-date step is Howard Hinnant's `civil_from_days`.
 pub fn rfc3339_utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
@@ -331,12 +275,10 @@ pub fn rfc3339_utc(secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
-/// Filename-safe timestamp: `20260921-195210Z` (colons are illegal on Windows).
 fn compact_timestamp(secs: u64) -> String {
     rfc3339_utc(secs).replace(['-', ':'], "").replace('T', "-")
 }
 
-/// The log file for a single scraper run.
 #[derive(Clone)]
 struct RunLog {
     file: Arc<Mutex<File>>,
@@ -344,10 +286,6 @@ struct RunLog {
 }
 
 impl RunLog {
-    /// Opens `<app log dir>/scraper-<timestamp>.log`.
-    ///
-    /// Returns `None` if that path cannot be used: logging is diagnostics, so
-    /// it must never be the reason a run fails.
     fn open(app: &AppHandle) -> Option<Self> {
         let dir = app.path().app_log_dir().ok()?;
         std::fs::create_dir_all(&dir).ok()?;
@@ -379,7 +317,6 @@ fn credentials_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("credentials.json"))
 }
 
-/// This app's own key file: generated on first use, beside `credentials.json`.
 fn key_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -396,22 +333,15 @@ fn read_key_file(path: &Path) -> Option<String> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
-/// The key derived from the login password, held in memory only.
-///
-/// Deliberately never written to disk. That is the point of the change: the
-/// stored DOP password is useless to anyone who copies `autodop.db`, because the
-/// key that opens it exists only while someone is signed in.
 #[derive(Default)]
 struct Unlock(Mutex<Option<Session>>);
 
-/// Who is signed in, and the key their login derived.
 #[derive(Clone)]
 struct Session {
     owner_id: String,
     key: String,
 }
 
-/// The signed-in session, if any.
 fn current_session(app: &AppHandle) -> Option<Session> {
     app.state::<Unlock>()
         .0
@@ -420,14 +350,12 @@ fn current_session(app: &AppHandle) -> Option<Session> {
         .and_then(|slot| slot.clone())
 }
 
-/// The signed-in owner's id, or an error asking for one.
 fn current_owner(app: &AppHandle) -> Result<String, String> {
     current_session(app)
         .map(|session| session.owner_id)
         .ok_or_else(|| "Sign in first.".into())
 }
 
-/// The key for this session, if unlocked.
 fn unlocked_key(app: &AppHandle) -> Option<String> {
     current_session(app).map(|session| session.key)
 }
@@ -444,7 +372,6 @@ fn clear_unlocked_key(app: &AppHandle) {
     }
 }
 
-/// Derive the key from `password` with the owner's salt, and hold the session.
 fn unlock_with(app: &AppHandle, owner_id: &str, password: &str) -> Result<String, String> {
     let auth = open_store(app)?
         .owner_auth(owner_id)?
@@ -460,8 +387,6 @@ fn unlock_with(app: &AppHandle, owner_id: &str, password: &str) -> Result<String
     Ok(key)
 }
 
-/// Keys this install may have used before the password-derived one: the old
-/// `key` file, and `FERNET_KEY`. Read only, to migrate an existing credential.
 fn legacy_keys(app: &AppHandle) -> Vec<String> {
     let mut keys = Vec::new();
     if let Ok(path) = key_path(app) {
@@ -477,17 +402,11 @@ fn legacy_keys(app: &AppHandle) -> Vec<String> {
     keys
 }
 
-/// Re-encrypt a credential left under an older key, once, at unlock.
-///
-/// Without this an upgrade would leave the stored DOP password readable only by
-/// a key nothing uses any more — which is to say, unreadable.
 fn migrate_credential(app: &AppHandle, owner_id: &str) -> Result<bool, String> {
     let key = unlocked_key(app).ok_or("Sign in first.")?;
     let store = open_store(app)?;
     let migrated = migrate_credential_with(&store, owner_id, &key, &legacy_keys(app))?;
     if migrated {
-        // The old key file has no further use, and leaving it behind would keep
-        // a copy of the secret's key on disk for no reason.
         if let Ok(path) = key_path(app) {
             let _ = std::fs::remove_file(path);
         }
@@ -495,7 +414,6 @@ fn migrate_credential(app: &AppHandle, owner_id: &str) -> Result<bool, String> {
     Ok(migrated)
 }
 
-/// The migration itself, free of the app handle so it can be tested.
 fn migrate_credential_with(
     store: &store::Store,
     owner_id: &str,
@@ -505,7 +423,7 @@ fn migrate_credential_with(
     let Some(stored) = store.credentials(owner_id)? else {
         return Ok(false);
     };
-    // Already under the derived key: nothing to do.
+
     if crypt::decrypt(key, &stored.token).is_ok() {
         return Ok(false);
     }
@@ -519,7 +437,6 @@ fn migrate_credential_with(
     Ok(false)
 }
 
-/// The local database file, beside `credentials.json` in the app-config folder.
 fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -532,10 +449,6 @@ fn open_store(app: &AppHandle) -> Result<store::Store, String> {
     store::Store::open(&store_path(app)?)
 }
 
-/// Decrypt a stored Fernet token, tolerating a plaintext value from an older
-/// build. `None` means it cannot be opened (missing or rotated key) — passing
-/// base64 on to the portal as if it were the password is worse than falling
-/// through to the next source.
 fn decrypt_stored(app: &AppHandle, stored: &str) -> Option<String> {
     if !stored.starts_with("gAAAA") {
         return Some(stored.to_string());
@@ -543,7 +456,6 @@ fn decrypt_stored(app: &AppHandle, stored: &str) -> Option<String> {
     unlocked_key(app).and_then(|key| crypt::decrypt(&key, stored).ok())
 }
 
-/// `DOP_USERNAME` / `DOP_PASSWORD` from the environment or a `.env`.
 fn env_credentials() -> Option<db::DopCredentials> {
     let user = std::env::var("DOP_USERNAME").unwrap_or_default();
     let password = std::env::var("DOP_PASSWORD").unwrap_or_default();
@@ -557,7 +469,6 @@ fn env_credentials() -> Option<db::DopCredentials> {
     })
 }
 
-/// The DOP pair stored in the local database for the signed-in owner.
 fn sqlite_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
     let owner = current_owner(app).ok()?;
     let stored = open_store(app).ok()?.credentials(&owner).ok().flatten()?;
@@ -572,8 +483,6 @@ fn sqlite_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
     })
 }
 
-/// The older `credentials.json`, still honoured so an existing install keeps
-/// working across the move to the database.
 fn file_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
     let text = std::fs::read_to_string(credentials_path(app).ok()?).unwrap_or_default();
     let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -598,13 +507,6 @@ fn file_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
     })
 }
 
-/// Resolve DOP credentials, most explicit source first:
-///
-/// 1. `DOP_USERNAME` / `DOP_PASSWORD` (environment or a `.env`)
-/// 2. the local database
-/// 3. the older app-config `credentials.json`
-///
-/// The password stays on this side — it is only ever handed to the runner.
 async fn resolve_credentials(app: &AppHandle) -> Result<db::DopCredentials, String> {
     if let Some(credentials) = env_credentials() {
         return Ok(credentials);
@@ -635,14 +537,6 @@ async fn app_info(app: AppHandle) -> AppInfo {
     }
 }
 
-// --------------------------------------------------------------------------- //
-// payload + result parsing (mirrors desktop/main.py --selftest behaviour)      //
-// --------------------------------------------------------------------------- //
-
-/// Normalize to the shape `scraper.py` expects.
-///
-/// `process_lists` zips `numbers` with `rebate`, so both arrays must be the same
-/// length — pad missing rebates with `1` ("no rebate, just pay").
 fn build_payload(lists: Vec<GenList>) -> Vec<Value> {
     let mut payload = Vec::new();
     for list in lists {
@@ -669,7 +563,6 @@ fn build_payload(lists: Vec<GenList>) -> Vec<Value> {
     payload
 }
 
-/// Extract the JSON array `scraper.py` prints after its log lines.
 fn parse_results(stdout: &str) -> Option<Vec<Value>> {
     let bytes = stdout.as_bytes();
     let starts: Vec<usize> = bytes
@@ -688,23 +581,13 @@ fn parse_results(stdout: &str) -> Option<Vec<Value>> {
     None
 }
 
-// --------------------------------------------------------------------------- //
-// commands                                                                    //
-// --------------------------------------------------------------------------- //
-
-/// Where a saved DOP password ended up, so the UI can say so plainly.
 #[derive(Debug, Serialize, Default)]
 pub struct SavedCredentials {
-    /// The password was encrypted before it was stored. Always true.
     pub stored_encrypted: bool,
-    /// The local database file it now lives in.
+
     pub location: String,
 }
 
-/// Store the DOP portal password, encrypted, in the local database.
-///
-/// DOP passwords expire every 180 days: change it on the portal, then save it
-/// here. Nothing leaves this machine, so a save takes effect immediately.
 #[tauri::command]
 fn set_credentials(
     app: AppHandle,
@@ -716,8 +599,6 @@ fn set_credentials(
         return Err("Username and password are both required.".into());
     }
 
-    // Encrypted with the key derived from the login password, so it can only be
-    // written while signed in — and the key itself is never stored.
     let owner = current_owner(&app)?;
     let key = unlocked_key(&app).ok_or(
         "Sign in first — the DOP password is encrypted with a key derived from your password.",
@@ -732,7 +613,6 @@ fn set_credentials(
     })
 }
 
-/// One known workspace on this machine.
 #[derive(Debug, Serialize)]
 pub struct OwnerInfo {
     pub id: String,
@@ -740,7 +620,6 @@ pub struct OwnerInfo {
     pub has_credentials: bool,
 }
 
-/// Whether any workspace exists, and which one this session belongs to.
 #[derive(Debug, Serialize)]
 pub struct AuthStatus {
     pub configured: bool,
@@ -772,8 +651,6 @@ fn auth_status(app: AppHandle) -> AuthStatus {
     }
 }
 
-/// Create a workspace on first run — username (the DOP portal id, a mobile
-/// number) plus a login password — and sign into it.
 #[tauri::command]
 fn setup_login(app: AppHandle, username: String, password: String) -> Result<OwnerInfo, String> {
     let username = username.trim().to_string();
@@ -790,8 +667,7 @@ fn setup_login(app: AppHandle, username: String, password: String) -> Result<Own
         &crypt::new_salt()?,
     )?;
     unlock_with(&app, &owner_id, &password)?;
-    // An install upgrading from the old key file has its DOP password under a
-    // key nothing uses any more; move it across now.
+
     let _ = migrate_credential(&app, &owner_id);
     Ok(OwnerInfo {
         id: owner_id,
@@ -800,8 +676,6 @@ fn setup_login(app: AppHandle, username: String, password: String) -> Result<Own
     })
 }
 
-/// Verify the login password for `owner_id`, derive the key, and migrate an
-/// old credential. `Ok(false)` means the password was simply wrong.
 #[tauri::command]
 fn login(app: AppHandle, owner_id: String, password: String) -> Result<OwnerInfo, String> {
     let store = open_store(&app)?;
@@ -814,7 +688,7 @@ fn login(app: AppHandle, owner_id: String, password: String) -> Result<OwnerInfo
     }
     unlock_with(&app, &owner_id, &password)?;
     store.touch_owner(&owner_id)?;
-    // A credential written under the old key file is re-encrypted here, once.
+
     let _ = migrate_credential(&app, &owner_id);
     let has_credentials = store.credentials(&owner_id)?.is_some();
     Ok(OwnerInfo {
@@ -824,17 +698,11 @@ fn login(app: AppHandle, owner_id: String, password: String) -> Result<OwnerInfo
     })
 }
 
-/// Forget the key for this session.
 #[tauri::command]
 fn logout(app: AppHandle) {
     clear_unlocked_key(&app);
 }
 
-/// Change the login password, re-wrapping the stored DOP password with it.
-///
-/// The re-wrap is not optional: the key that opens the stored credential is
-/// derived from this password, so changing the password without re-encrypting
-/// would leave the DOP password permanently unreadable.
 #[tauri::command]
 fn change_login_password(
     app: AppHandle,
@@ -855,7 +723,6 @@ fn change_login_password(
     }
     let current = unlocked_key(&app).ok_or("Sign in first, then change the password.")?;
 
-    // New salt and key first, so the credential can be moved across in one step.
     let salt = crypt::new_salt()?;
     let new_key = crypt::derive_key(&new_password, &salt)?;
 
@@ -882,7 +749,6 @@ fn scraper_location(app: AppHandle) -> ScraperLocation {
     locate_scraper(Some(&app))
 }
 
-/// Point the app at a different `scraper.py`.
 #[tauri::command]
 fn set_scraper_path(app: AppHandle, path: String) -> Result<ScraperLocation, String> {
     let candidate = PathBuf::from(path.trim());
@@ -893,18 +759,12 @@ fn set_scraper_path(app: AppHandle, path: String) -> Result<ScraperLocation, Str
     Ok(locate_scraper(Some(&app)))
 }
 
-/// Drop the override and go back to the bundled copy.
 #[tauri::command]
 fn clear_scraper_path(app: AppHandle) -> Result<ScraperLocation, String> {
     write_scraper_override(&app, None)?;
     Ok(locate_scraper(Some(&app)))
 }
 
-/// `"<short sha> · <when this build was produced>"`.
-///
-/// The commit alone is not enough: rebuild the same commit and the stamp would
-/// be identical, which is exactly the confusion this exists to prevent. The
-/// minutes-resolution build time makes every artifact tell itself apart.
 pub fn build_stamp() -> String {
     let commit = option_env!("AUTODOP_BUILD_STAMP").unwrap_or("unknown");
     match option_env!("AUTODOP_BUILD_EPOCH").and_then(|value| value.parse::<u64>().ok()) {
@@ -913,7 +773,6 @@ pub fn build_stamp() -> String {
     }
 }
 
-/// `2026-10-01T00:18Z` — `rfc3339_utc` without the seconds.
 fn iso_minute(epoch: u64) -> String {
     let full = rfc3339_utc(epoch);
     if full.len() >= 17 {
@@ -923,12 +782,8 @@ fn iso_minute(epoch: u64) -> String {
     }
 }
 
-/// Run `scraper.py` for the supplied lists. Streams each stdout line to the
-/// frontend as a `scraper-progress` event and returns the parsed result array.
 #[tauri::command]
 async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
-    // Credentials: env/`.env` first, then the config file, then the local
-    // database. The password never leaves Rust.
     let credentials = match resolve_credentials(&app).await {
         Ok(credentials) => credentials,
         Err(error) => {
@@ -963,8 +818,6 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
         Err(e) => return GenResult::err(format!("could not serialize payload: {e}")),
     };
 
-    // Record the attempt before it starts, so a crash still leaves a trace of
-    // what was asked for.
     let run_id = open_store(&app).ok().and_then(|store| {
         current_owner(&app)
             .ok()
@@ -1011,12 +864,9 @@ fn run_scraper(
     lists_json: &str,
 ) -> GenResult {
     let target = PathBuf::from(&location.path);
-    // A frozen helper takes the arguments directly; a script needs an interpreter
-    // in front of it.
+
     let is_sidecar = location.kind == "sidecar";
 
-    // Mirror the run to a file: the progress area is cleared as soon as the
-    // window moves on, and a failure has to stay inspectable afterwards.
     let run_log = RunLog::open(app);
     if let Some(log) = &run_log {
         log.write("autodop - scraper run");
@@ -1065,8 +915,6 @@ fn run_scraper(
         }
     };
 
-    // Drain both pipes on their own threads: streaming stdout to the UI as
-    // progress, so a full pipe buffer can never deadlock the child.
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
 
@@ -1091,9 +939,6 @@ fn run_scraper(
     let stderr_thread = std::thread::spawn(move || {
         let mut collected = String::new();
         if let Some(pipe) = stderr_pipe {
-            // Stream stderr to the UI too. A Python traceback is the single most
-            // useful thing a failed run produces, and it used to be collected
-            // silently, truncated into `log`, and then never rendered.
             for line in BufReader::new(pipe).lines().map_while(Result::ok) {
                 let _ = app_for_stderr.emit(PROGRESS_EVENT, line.clone());
                 if let Some(log) = &log_for_stderr {
@@ -1106,7 +951,6 @@ fn run_scraper(
         collected
     });
 
-    // Poll-with-deadline so a hung driver cannot wedge the app forever.
     let started = Instant::now();
     let mut timed_out = false;
     let status = loop {
@@ -1177,11 +1021,6 @@ fn tail(text: &str, limit: usize) -> Option<String> {
     Some(trimmed[start..].to_string())
 }
 
-// --------------------------------------------------------------------------- //
-// entrypoint                                                                  //
-// --------------------------------------------------------------------------- //
-
-/// What the local database holds.
 #[derive(Debug, Serialize)]
 pub struct LocalStatus {
     pub path: String,
@@ -1229,39 +1068,30 @@ fn local_status(app: AppHandle) -> LocalStatus {
     }
 }
 
-/// Load every account from the local database.
 #[tauri::command]
 fn load_accounts(app: AppHandle) -> Result<Vec<Value>, String> {
     open_store(&app)?.accounts(&current_owner(&app)?)
 }
 
-/// Load the lists (and per-account rebates) from the local database.
 #[tauri::command]
 fn load_lists(app: AppHandle) -> Result<Vec<db::DbList>, String> {
     open_store(&app)?.lists(&current_owner(&app)?)
 }
 
-/// Upsert the supplied lists locally and return what is now stored.
 #[tauri::command]
 fn save_lists(app: AppHandle, lists: Vec<db::InputList>) -> Result<Vec<db::DbList>, String> {
     open_store(&app)?.save_lists(&current_owner(&app)?, &lists)
 }
 
-/// What the PDF import moved across, so the UI can say what happened.
 #[derive(Debug, Serialize)]
 pub struct PdfImportReport {
-    /// Rows that became accounts.
     pub imported: usize,
-    /// Rows whose account number already exists for this owner.
+
     pub skipped_duplicates: usize,
-    /// Lines that looked like data but did not parse.
+
     pub unparsed: usize,
 }
 
-/// First-run import: pull accounts out of the agent portal's
-/// "Deposit Accounts" PDF printout (Select | Account No | Account Name |
-/// Denomination | Month Paid Upto | Next Due Date). Only the number, the
-/// name and the denomination are taken; REF and CNumber stay empty.
 #[tauri::command]
 fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, String> {
     let source = expand_home(&path);
@@ -1269,8 +1099,6 @@ fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, 
         return Err(format!("{} is not a file", source.display()));
     }
 
-    // Extract the plain text the way a browser print does: one row per line,
-    // columns separated by spaces or the table's rule lines.
     let text = pdf_extract::extract_text(&source.display().to_string())
         .map_err(|error| format!("could not read the PDF: {error}"))?;
 
@@ -1280,10 +1108,7 @@ fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, 
     let mut imported = 0usize;
     let mut skipped_duplicates = 0usize;
     let mut unparsed = 0usize;
-    // Long holder names wrap across two extracted lines: the number and the
-    // first half of the name on one line (no amount), the rest plus the
-    // amount on the next. Carry the previous line forward until the row
-    // completes.
+
     let mut carry = String::new();
     for line in text.lines() {
         let combined = if carry.is_empty() {
@@ -1312,8 +1137,6 @@ fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, 
                 }
             }
             Ok(None) => {
-                // A data-ish line without an amount is half a row; headers and
-                // footers carry no account number and are dropped.
                 carry = if looks_like_data && !line.contains("Cr.") {
                     combined
                 } else {
@@ -1341,15 +1164,7 @@ fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, 
     })
 }
 
-/// Parse one line of the printout into (number, name, denomination).
-///
-/// A row is: an index number, a 10-12 digit account number, the holder name,
-/// a `1,500.00 Cr.`-shaped denomination, the month paid upto, and a date that
-/// may be missing. Anything else on the page (headers, footers) has no
-/// denomination-shaped token and yields `Ok(None)`; a line that has the
-/// amount shape but no account number is malformed and yields `Err(())`.
 pub fn parse_deposit_row(line: &str) -> Result<Option<(String, String, String)>, &'static str> {
-    // A denomination always looks like `1,500.00` or `500.00`.
     let is_amount = |token: &str| -> bool {
         let Some((whole, fraction)) = token.split_once('.') else {
             return false;
@@ -1361,8 +1176,7 @@ pub fn parse_deposit_row(line: &str) -> Result<Option<(String, String, String)>,
     };
 
     let tokens: Vec<&str> = line.split_whitespace().collect();
-    // Find the denomination token; everything before it (minus the "Cr.") is
-    // index + number + name.
+
     let mut amount_at = None;
     for (index, token) in tokens.iter().enumerate() {
         if is_amount(token)
@@ -1379,8 +1193,7 @@ pub fn parse_deposit_row(line: &str) -> Result<Option<(String, String, String)>,
     };
 
     let before = &tokens[..amount_at];
-    // The last purely numeric token before the amount is the account number;
-    // the leading 1-3 digit "Select" index (if any) is dropped.
+
     let number_at = before
         .iter()
         .rposition(|token| {
@@ -1392,8 +1205,7 @@ pub fn parse_deposit_row(line: &str) -> Result<Option<(String, String, String)>,
     if name.is_empty() {
         return Err("no holder name on the line");
     }
-    // `1,500.00` -> `1500`: the legacy data held whole rupees without commas,
-    // and the display layer does not expect a decimal point.
+
     let mut denomination: String = tokens[amount_at].replace(',', "");
     if let Some((whole, _)) = denomination.split_once('.') {
         denomination = whole.to_string();
@@ -1401,7 +1213,6 @@ pub fn parse_deposit_row(line: &str) -> Result<Option<(String, String, String)>,
     Ok(Some((number, name, denomination)))
 }
 
-/// Insert or update one account for the signed-in owner.
 #[tauri::command]
 fn save_account(app: AppHandle, account: Value) -> Result<String, String> {
     let owner = current_owner(&app)?;
@@ -1415,8 +1226,7 @@ fn save_account(app: AppHandle, account: Value) -> Result<String, String> {
     if number.is_empty() {
         return Err("Account number is required.".into());
     }
-    // An existing row with the same number under this owner is updated in
-    // place; a new number is inserted.
+
     let existing: Option<String> = {
         let id = account.get("_id").and_then(Value::as_str).unwrap_or("");
         if id.is_empty() {
@@ -1438,31 +1248,22 @@ fn save_account(app: AppHandle, account: Value) -> Result<String, String> {
     store.add_account(&owner, &row)
 }
 
-/// Remove one account; its list entries go with it.
 #[tauri::command]
 fn delete_account(app: AppHandle, id: String) -> Result<bool, String> {
     open_store(&app)?.delete_account(&current_owner(&app)?, &id)
 }
 
-// --------------------------------------------------------------------------- //
-// backup / restore                                                            //
-// --------------------------------------------------------------------------- //
-
-/// What a backup command did: the counts in the file that was written or
-/// restored, and — for a restore — where the replaced database was kept.
 #[derive(Debug, Serialize)]
 pub struct BackupOutcome {
     pub accounts: i64,
     pub lists: i64,
     pub entries: i64,
     pub has_credentials: bool,
-    /// Only set by a restore: the safety copy of the replaced database.
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
 }
 
-/// `~/…` and bare `~` expand to the home directory; anything else is taken
-/// as given.
 fn expand_home(path: &str) -> PathBuf {
     if path == "~" {
         if let Some(home) = std::env::var_os("HOME") {
@@ -1477,13 +1278,6 @@ fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// Write a backup of the live database to `path`.
-///
-/// The backup is a complete SQLite file produced by SQLite's own backup API
-/// (a plain copy can miss WAL pages). It carries the login hash, the KDF
-/// salt, and the encrypted DOP password — which is only readable with the
-/// login password it was derived from, so "backup" always means *file plus
-/// you remembering that password*.
 #[tauri::command]
 fn export_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> {
     let destination = expand_home(&path);
@@ -1505,12 +1299,6 @@ fn export_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     })
 }
 
-/// Replace the live database with the backup at `path`.
-///
-/// The current database is first written to `autodop.db.pre-restore-<stamp>`
-/// next to it, so a wrong choice is undoable by hand. Signing out is forced:
-/// the in-memory key was derived from the *previous* login password and will
-/// not open the restored file.
 #[tauri::command]
 fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> {
     let source = expand_home(&path);
@@ -1520,15 +1308,12 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     let snapshot = backup::inspect(&source).map_err(fs_hint)?;
     let live = store_path(&app)?;
 
-    // Safety copy of what is being replaced, before anything is touched.
     let safety = live.with_extension(format!("db.pre-restore-{}", compact_timestamp(now_secs())));
     backup::export(&live, &safety)?;
     let previous = safety.display().to_string();
 
-    // The key in memory belongs to the old login password; drop it.
     clear_unlocked_key(&app);
 
-    // Remove the live file and its WAL sidecars, then put the backup in place.
     for sidecar in ["-wal", "-shm"] {
         let _ = std::fs::remove_file(live.with_extension(format!("db{sidecar}")));
     }
@@ -1538,8 +1323,6 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
         let _ = std::fs::remove_file(live.with_extension(format!("db{sidecar}")));
     }
 
-    // Read the result back through a real store; if the counts disagree the
-    // safety copy is still sitting next to it.
     let store = open_store(&app)?;
     let counts = store.counts_all()?;
     if counts.accounts != snapshot.accounts
@@ -1561,9 +1344,6 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     })
 }
 
-/// Touch up file errors so the common self-inflicted one explains itself:
-/// an app running straight from the mounted installer DMG is read-only to
-/// macOS, and every write — including to ~/Downloads — fails with os error 30.
 fn fs_hint(error: String) -> String {
     if error.contains("read-only file system") || error.contains("os error 30") {
         return format!(
@@ -1574,12 +1354,6 @@ fn fs_hint(error: String) -> String {
     error
 }
 
-/// Write a portable JSON backup of the live database to `path`.
-///
-/// A human-readable JSON file — accounts and lists as plain JSON, the DOP
-/// password as the same Fernet token the store holds, with the login hash and
-/// salt needed to open it. Import on another machine asks for the app login
-/// password this was made with.
 #[tauri::command]
 fn export_portable_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> {
     let destination = expand_home(&path);
@@ -1620,12 +1394,6 @@ fn export_portable_backup(app: AppHandle, path: String) -> Result<BackupOutcome,
     })
 }
 
-/// Replace the live database with the portable JSON backup at `path`.
-///
-/// `login_password` is the app login password of the machine that made the
-/// backup — it is verified against the hash carried in the file, and the DOP
-/// password it opens is re-encrypted under this machine's login. Signing in
-/// first is required for that; the file's accounts and lists need nothing.
 #[tauri::command]
 fn import_portable_backup(
     app: AppHandle,
@@ -1658,9 +1426,6 @@ fn import_portable_backup(
     })
 }
 
-/// Which DOP credentials the app would use, and where they come from.
-///
-/// Never returns the password — only the portal id and the source.
 #[tauri::command]
 async fn dop_credentials_status(app: AppHandle) -> db::DopCredentialStatus {
     match resolve_credentials(&app).await {
@@ -1684,8 +1449,6 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Unlock::default())
         .setup(|app| {
-            // Make `.env` values visible to code that reads `std::env` directly
-            // (`AUTODOP_PYTHON`, `AUTODOP_SCRAPER`); `db::setting` only looks up.
             db::hydrate_env(app.handle());
             Ok(())
         })
@@ -1737,11 +1500,9 @@ mod tests {
         let nested = dir.join("_up_/scraper.py");
         std::fs::create_dir_all(dir.join("_up_")).unwrap();
 
-        // A `../scraper.py` resource is copied to `_up_/` — what the .app ships.
         std::fs::write(&nested, "# placeholder").unwrap();
         assert_eq!(bundled_scraper_in(&dir).unwrap(), nested);
 
-        // A flat resource wins when both are present.
         std::fs::write(&flat, "# placeholder").unwrap();
         assert_eq!(bundled_scraper_in(&dir).unwrap(), flat);
 
@@ -1766,7 +1527,7 @@ mod tests {
         } else {
             assert!(!name.ends_with(".exe"), "got {name}");
         }
-        // Must match the name scripts/build-sidecar.mjs writes.
+
         if cfg!(target_arch = "aarch64") {
             assert!(name.contains("arm64"), "got {name}");
         }
@@ -1798,13 +1559,11 @@ mod tests {
 
     #[test]
     fn migrates_a_credential_from_the_old_key_file() {
-        // Credentials reference an owner row; make one.
         let store = store::Store::open_in_memory().unwrap();
         let owner = store.create_owner("9999999999", "h", "s").unwrap();
         let old = crypt::generate_key().unwrap();
         let new = crypt::derive_key("my login password", &crypt::new_salt().unwrap()).unwrap();
 
-        // Written under the old key, as an upgrading install has it.
         store
             .set_credentials(
                 &owner,
@@ -1818,13 +1577,11 @@ mod tests {
             "the new key must not open the old ciphertext"
         );
 
-        // Offered the old key as a legacy source, it moves across.
         assert!(migrate_credential_with(&store, &owner, &new, &[old]).unwrap());
         let after = store.credentials(&owner).unwrap().unwrap();
         assert_eq!(crypt::decrypt(&new, &after.token).unwrap(), "portal-secret");
         assert_eq!(after.username, "DOP.MI1", "the portal id is untouched");
 
-        // Idempotent: nothing left to do the second time.
         assert!(!migrate_credential_with(&store, &owner, &new, &[]).unwrap());
     }
 
@@ -1838,7 +1595,6 @@ mod tests {
             .set_credentials(&owner, "DOP.MI1", &crypt::encrypt(&stranger, "x").unwrap())
             .unwrap();
 
-        // A key that does not open it must not clobber it.
         assert!(
             !migrate_credential_with(&store, &owner, &new, &[crypt::generate_key().unwrap()])
                 .unwrap()
@@ -1873,7 +1629,6 @@ mod tests {
 
     #[test]
     fn a_wrapped_name_and_a_missing_date_both_parse() {
-        // The continuation line alone has the amount but no account number.
         let (number, name, _) = parse_deposit_row("62 3827124362 KAVITHA G NAIR 1,500.00 Cr. 60")
             .expect("parses")
             .expect("a row");
@@ -1903,10 +1658,9 @@ mod tests {
             "baked in at compile time, so it must not drift"
         );
         if stamp == "unknown" {
-            return; // no git checkout — nothing to assert about the commit
+            return;
         }
 
-        // Expect "<short sha>[+dirty] · YYYY-MM-DDTHH:MMZ".
         let (sha, when) = stamp
             .split_once(" · ")
             .unwrap_or_else(|| panic!("no build time in {stamp:?} — was AUTODOP_BUILD_EPOCH set?"));
@@ -1920,7 +1674,6 @@ mod tests {
 
     #[test]
     fn keeps_every_list_in_one_payload() {
-        // "Generate All Lists" hands every list to a single scraper.py run.
         let payload = build_payload(vec![
             list("A", &["111"], &[0]),
             list("B", &["222", "333"], &[0, 2]),
@@ -1934,7 +1687,6 @@ mod tests {
 
     #[test]
     fn formats_epoch_timestamps_as_utc() {
-        // Expected values cross-checked against Python's datetime.
         assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339_utc(1_000_000_000), "2001-09-09T01:46:40Z");
         assert_eq!(rfc3339_utc(1_758_468_000), "2025-09-21T15:20:00Z");
@@ -1945,7 +1697,7 @@ mod tests {
     fn log_filenames_are_safe_on_every_platform() {
         let name = compact_timestamp(1_758_468_000);
         assert_eq!(name, "20250921-152000Z");
-        // Windows rejects ':' in file names.
+
         assert!(!name.contains(':'));
     }
 

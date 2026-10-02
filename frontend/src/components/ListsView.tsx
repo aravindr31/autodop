@@ -1,9 +1,3 @@
-/**
- * List Viewing section (spec §3.3 + §4.2 + §4.3): summaries of all non-empty
- * lists with live total denomination + item count, expandable items with
- * Remove, Copy numbers, Clear, and backend submission to a configurable
- * endpoint.
- */
 import { useState, useEffect } from 'react';
 import { useStore } from '../lib/store';
 import type { Account, AccountList } from '../lib/types';
@@ -24,7 +18,7 @@ function copyText(text: string): boolean {
 
 function ItemRow({ listId, account }: { listId: string; account: Account }): React.ReactElement {
   const store = useStore.getState();
-  // Primitive selector, so the row re-renders only when its own value changes.
+
   const rebate = useStore(
     (s) => s.lists.find((l) => l.id === listId)?.rebates?.[account._id] ?? 0,
   );
@@ -63,15 +57,15 @@ function ItemRow({ listId, account }: { listId: string; account: Account }): Rea
   );
 }
 
-/**
- * Payload for one list, shaped exactly as the Streamlit UI built it —
- * `{ name, numbers, rebate }`, see `main.py:557`.
- *
- * The rebate default matters: the original read `acc.get("Rebate", 0)` and
- * those account documents carry no `Rebate` field, so 0 was the effective
- * value. `scraper.py:165` only *skips* the rebate step when the value is 1 — so
- * 0 means "set the installment number to 0", not "leave it alone".
- */
+
+
+
+
+
+
+
+
+
 function listPayload(
   list: AccountList,
   accounts: Account[],
@@ -89,12 +83,12 @@ function listPayload(
   };
 }
 
-/** State shared by every Generate button: busy, live progress, last failure. */
+
 function useGenerate() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
-  // Survives the run: progress is cleared when it ends, and a failure has to
-  // stay readable instead of flashing past.
+
+
   const [failure, setFailure] = useState<{
     message: string;
     log?: string;
@@ -112,14 +106,14 @@ function useGenerate() {
     setBusy(true);
     setFailure(null);
     setProgress('Starting scraper…');
-    // Every selected list goes into ONE invocation, the way the Streamlit
-    // "Generate All Lists" button did: scraper.py loops over the array itself.
+
+
     const res = await generateLists(payload);
     setBusy(false);
     setProgress('');
     if (!res.ok) {
-      // Show the backend's own log — the scraper's stderr is where a Python
-      // traceback lands, and it used to be discarded here.
+
+
       setFailure({ message: res.error ?? 'Generate failed', log: res.log, logPath: res.log_path });
       notify(res.error ?? 'Generate failed', 'error');
       return;
@@ -145,7 +139,7 @@ function useGenerate() {
   return { busy, progress, failure, run };
 }
 
-/** The failure panel: the backend's log tail, and where the full log lives. */
+
 function FailureNote({
   failure,
 }: {
@@ -179,11 +173,11 @@ function FailureNote({
   );
 }
 
-/**
- * "Generate (DOP)" — hands this list's account numbers to scraper.py through
- * the pywebview desktop shell. In a plain browser there is no bridge, so the
- * button explains that instead of silently doing nothing.
- */
+
+
+
+
+
 function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[] }): React.ReactElement {
   const { ready, info } = useDesktop();
   const accounts = useStore((s) => s.accounts);
@@ -218,10 +212,10 @@ function GenerateButton({ list, numbers }: { list: AccountList; numbers: string[
   );
 }
 
-/**
- * Empty every list in one go, keeping the lists themselves — the accounts stay
- * in the Accounts tab. Not undoable, so it is a two-step action.
- */
+
+
+
+
 function ClearAllButton({ lists }: { lists: AccountList[] }): React.ReactElement | null {
   const store = useStore.getState();
   const [confirming, setConfirming] = useState(false);
@@ -261,11 +255,11 @@ function ClearAllButton({ lists }: { lists: AccountList[] }): React.ReactElement
   );
 }
 
-/**
- * "Generate All Lists" — the Streamlit UI's headline action, restored: every
- * non-empty list goes out in a single scraper.py invocation, which logs in once
- * and then works through the lists in order.
- */
+
+
+
+
+
 function GenerateAllButton({ lists }: { lists: AccountList[] }): React.ReactElement {
   const { ready, info } = useDesktop();
   const accounts = useStore((s) => s.accounts);
@@ -331,7 +325,7 @@ function ListCard({ listId }: { listId: string }): React.ReactElement {
 
   const onSubmit = async () => {
     setSubmitting(true);
-    // Resolve from the freshest state at call time.
+
     const accountOf = (id: string) => useStore.getState().accounts.find((a) => a._id === id);
     const res = await submitList(list, store.submitEndpoint, accountOf);
     notify(res.message, res.ok ? 'success' : 'error');
@@ -407,7 +401,7 @@ export default function ListsView(): React.ReactElement {
   const store = useStore.getState();
   const [endpointInput, setEndpointInput] = useState(endpoint);
 
-  // Lists that have at least one account (spec §3.3: "lists that are not empty").
+
   const populated = lists
     .filter((l) => l.accountIds.length > 0)
     .sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
@@ -433,7 +427,7 @@ export default function ListsView(): React.ReactElement {
         <Button variant="secondary" size="sm" onClick={saveEndpoint}>Save</Button>
       </div>
 
-      {/* The Streamlit UI's single "Generate All Lists" action (main.py:543). */}
+      { }
       {populated.length > 0 ? <GenerateAllButton lists={populated} /> : null}
       {populated.length > 0 ? <ClearAllButton lists={populated} /> : null}
 

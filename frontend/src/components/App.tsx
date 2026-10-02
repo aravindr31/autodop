@@ -1,11 +1,3 @@
-/**
- * Application shell (spec): header with active-list chip, Accounts / Lists
- * tabs, an inline sidebar on desktop that becomes a slide-over drawer on
- * mobile, a Manage drawer (add/delete account, change password, sign out),
- * and a global toast stack. All interactive state is reactive via the Zustand
- * store and persists to localStorage. The shell is gated behind a client-side
- * login (AuthScreen) until the separately-built backend provides real auth.
- */
 import { useEffect, useState } from 'react';
 import { useStore } from '../lib/store';
 import { formatINR } from '../lib/format';
@@ -35,9 +27,9 @@ export default function App(): React.ReactElement {
   const lists = useStore((s) => s.lists);
   const activeListId = useStore((s) => s.activeListId);
   const activeList = lists.find((l) => l.id === activeListId);
-  // totalsOf returns a fresh object each call — selecting it would be a new
-  // snapshot identity every render (React "../#infinite-loop" warning). Select
-  // primitives instead so the snapshot is cacheable/stable.
+
+
+
   const activeCount = useStore((s) => s.totalsOf(activeListId).count);
   const activeAmount = useStore((s) => s.totalsOf(activeListId).amount);
 
@@ -58,15 +50,15 @@ export default function App(): React.ReactElement {
     [],
   );
 
-  // Ask the backend (desktop) or local storage (browser) whether a login
-  // password is set, before showing the wrong prompt.
+
+
   useEffect(() => {
     void useStore.getState().refreshAuth();
   }, []);
 
-  // In the desktop app, pull the signed-in owner's accounts and lists from
-  // the local database. Re-runs on every sign-in: the previous owner's rows
-  // were cleared on the way in, and this is what puts the right ones back.
+
+
+
   useEffect(() => {
     if (!isDesktop() || !loggedIn) return;
     let cancelled = false;
@@ -87,7 +79,7 @@ export default function App(): React.ReactElement {
     };
   }, [loggedIn]);
 
-  // All hooks above are unconditional; the gate below is a pure render branch.
+
   if (!loggedIn) {
     return (
       <div className="min-h-screen">
@@ -99,7 +91,7 @@ export default function App(): React.ReactElement {
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50 text-slate-900 antialiased">
-      {/* ---------------- Top bar ---------------- */}
+      { }
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="flex items-center gap-3 px-4 py-3">
           <button
@@ -119,14 +111,14 @@ export default function App(): React.ReactElement {
 
           <div className="min-w-[1px] flex-1" />
 
-          {/* Active list chip */}
+          { }
           <div className="hidden items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 sm:flex">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Active</span>
             <span className="text-sm font-medium text-slate-800">{activeList?.name ?? '—'}</span>
             <PillHost count={activeCount} amount={activeAmount} />
           </div>
 
-          {/* Manage */}
+          { }
           <button
             type="button"
             aria-label="Manage accounts"
@@ -137,7 +129,7 @@ export default function App(): React.ReactElement {
             <Settings className="h-5 w-5" />
           </button>
 
-          {/* Tabs */}
+          { }
           <nav className="flex rounded-lg bg-slate-100 p-0.5" aria-label="Sections">
             {([
               ['accounts', 'Accounts'],
@@ -159,9 +151,9 @@ export default function App(): React.ReactElement {
         </div>
       </header>
 
-      {/* ---------------- Body ---------------- */}
+      { }
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 lg:grid lg:grid-cols-[16rem_1fr] lg:items-start lg:gap-6">
-        {/* Desktop sidebar */}
+        { }
         <aside className="hidden w-full rounded-xl border border-slate-200 bg-white p-3 shadow-sm lg:block">
           <SidebarPanel onNavigate={() => {}} />
           <div className="mt-3 border-t border-slate-100 pt-2">
@@ -169,17 +161,17 @@ export default function App(): React.ReactElement {
           </div>
         </aside>
 
-        {/* Main tab content */}
+        { }
         <main className="min-w-0">{tab === 'accounts' ? <Browser /> : <ListsView />}</main>
       </div>
 
-      {/* Mobile drawer */}
+      { }
       <Sidebar open={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
-      {/* Manage drawer */}
+      { }
       {manageOpen && <ManagePanel onClose={() => setManageOpen(false)} />}
 
-      {/* Toasts */}
+      { }
       <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
         {toasts.map((t) => (
           <ToastViewItem

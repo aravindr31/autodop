@@ -1,20 +1,9 @@
-//! Local SQLite store — the app's own database, one file on this machine.
-//!
-//! Everything belongs to an **owner**: a person identified by their DOP id
-//! (a mobile number), who signs in with their own login password. Accounts,
-//! lists, the DOP credential and the run history are all per-owner; several
-//! owners can share one install without seeing each other's data.
-//!
-//! Takes a path rather than an `AppHandle` on purpose, so the whole schema and
-//! every round trip can be exercised in tests against an in-memory database.
-
 use crate::db::{DbList, DbListEntry, InputList};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// Bump when the schema changes; [`Store::migrate`] applies what is missing.
 const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
@@ -98,11 +87,10 @@ pub struct Counts {
 #[derive(Debug, Clone)]
 pub struct StoredCredentials {
     pub username: String,
-    /// Fernet token, never the plaintext.
+
     pub token: String,
 }
 
-/// One signed-in identity: who, and what verifies their password.
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct OwnerRow {
     pub id: String,
@@ -125,7 +113,6 @@ fn now() -> String {
     crate::rfc3339_utc(crate::now_secs())
 }
 
-/// Does `table` already carry `column`? Drives the v1 → v2 migration.
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
     let mut statement = conn
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -139,7 +126,6 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, Stri
 }
 
 impl Store {
-    /// Open (creating if needed) the database at `path`, and migrate it.
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -156,8 +142,6 @@ impl Store {
     }
 
     fn from_connection(conn: Connection) -> Result<Self, String> {
-        // WAL keeps reads working while a run holds a write; foreign keys make
-        // the cascades above real.
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
         conn.pragma_update(None, "foreign_keys", true)
             .map_err(|error| error.to_string())?;
@@ -171,9 +155,7 @@ impl Store {
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|error| error.to_string())?;
-        // v1 databases predate owners: their tables lack owner_id and their
-        // single login lives in `meta`. Bring the whole file across in one
-        // transaction before the v2 schema touches anything.
+
         let table_exists = |name: &str| -> Result<bool, String> {
             let count: i64 = self
                 .conn
@@ -199,8 +181,6 @@ impl Store {
             .map_err(|error| error.to_string())
     }
 
-    /// Move a single-user v1 database under a synthetic `default` owner. The
-    /// owner's username is the DOP portal id the credential was saved with.
     fn migrate_v1_to_v2(&self) -> Result<(), String> {
         let tx = self
             .conn
@@ -255,7 +235,7 @@ impl Store {
              CREATE UNIQUE INDEX lists_owner_name ON lists(owner_id, name);",
         )
         .map_err(|error| error.to_string())?;
-        // `credentials` is keyed by a constant 1 in v1; rebuild it owner-keyed.
+
         tx.execute_batch(
             "CREATE TABLE credentials_v2 (
                 owner_id   TEXT PRIMARY KEY,
@@ -269,22 +249,18 @@ impl Store {
              ALTER TABLE credentials_v2 RENAME TO credentials;",
         )
         .map_err(|error| error.to_string())?;
-        // Auth lives in `owners` from here on.
+
         tx.execute(
             "DELETE FROM meta WHERE key IN ('login_hash', 'kdf_salt')",
             [],
         )
         .map_err(|error| error.to_string())?;
-        // Hold the migrated owners under its real name once the old tables are
-        // gone (SQLite needs the name free before RENAME).
+
         tx.execute_batch("ALTER TABLE owners_v1 RENAME TO owners;")
             .map_err(|error| error.to_string())?;
         tx.commit().map_err(|error| error.to_string())
     }
 
-    // ---- owners ----
-
-    /// Every owner, newest activity last.
     pub fn owners(&self) -> Result<Vec<OwnerRow>, String> {
         let mut statement = self
             .conn
@@ -315,8 +291,6 @@ impl Store {
         Ok(count > 0)
     }
 
-    /// Register a new owner with their own login. The username is the DOP
-    /// portal id (a mobile number) and must be unique on this machine.
     pub fn create_owner(
         &self,
         username: &str,
@@ -340,7 +314,6 @@ impl Store {
         Ok(id)
     }
 
-    /// The login material for one owner, when the owner exists.
     pub fn owner_auth(&self, owner_id: &str) -> Result<Option<OwnerAuth>, String> {
         let found = self
             .conn
@@ -359,7 +332,6 @@ impl Store {
         Ok(found)
     }
 
-    /// Re-key one owner's login (password change).
     pub fn set_owner_auth(
         &self,
         owner_id: &str,
@@ -385,8 +357,6 @@ impl Store {
         Ok(())
     }
 
-    // ---- accounts ----
-
     pub fn counts(&self, owner_id: &str) -> Result<Counts, String> {
         let one = |sql: &str| -> Result<i64, String> {
             self.conn
@@ -401,7 +371,6 @@ impl Store {
         })
     }
 
-    /// Every row in the file, across owners — what a whole-file backup holds.
     pub fn counts_all(&self) -> Result<Counts, String> {
         let one = |sql: &str| -> Result<i64, String> {
             self.conn
@@ -415,7 +384,6 @@ impl Store {
         })
     }
 
-    /// Accounts in the same JSON shape the frontend already expects.
     pub fn accounts(&self, owner_id: &str) -> Result<Vec<Value>, String> {
         let mut statement = self
             .conn
@@ -441,7 +409,6 @@ impl Store {
             .map_err(|error| error.to_string())
     }
 
-    /// Replace this owner's accounts with `rows`. Other owners are untouched.
     pub fn replace_accounts(&self, owner_id: &str, rows: &[Value]) -> Result<usize, String> {
         let tx = self
             .conn
@@ -490,8 +457,6 @@ impl Store {
         Ok(inserted)
     }
 
-    /// Add one account. A duplicate number is refused rather than silently
-    /// merging, because the number is the account's identity.
     pub fn add_account(&self, owner_id: &str, row: &Value) -> Result<String, String> {
         let text = |key: &str| {
             row.get(key)
@@ -533,7 +498,6 @@ impl Store {
         Ok(id)
     }
 
-    /// Remove an account; its list entries go with it (ON DELETE CASCADE).
     pub fn delete_account(&self, owner_id: &str, id: &str) -> Result<bool, String> {
         let removed = self
             .conn
@@ -544,8 +508,6 @@ impl Store {
             .map_err(|error| error.to_string())?;
         Ok(removed > 0)
     }
-
-    // ---- lists ----
 
     pub fn lists(&self, owner_id: &str) -> Result<Vec<DbList>, String> {
         let mut statement = self
@@ -594,8 +556,6 @@ impl Store {
         Ok(lists)
     }
 
-    /// Upsert lists by id/name and replace their contents. Mirrors what the
-    /// old writer did, so the frontend contract is unchanged.
     pub fn save_lists(&self, owner_id: &str, lists: &[InputList]) -> Result<Vec<DbList>, String> {
         let tx = self
             .conn
@@ -610,8 +570,6 @@ impl Store {
                 trimmed
             };
 
-            // Prefer the id; fall back to matching on the name (ids are created
-            // client-side and can be missing on a first save).
             let existing: Option<String> = if !list.id.trim().is_empty() {
                 tx.query_row(
                     "SELECT id FROM lists WHERE id = ?1 AND owner_id = ?2",
@@ -651,8 +609,6 @@ impl Store {
             tx.execute("DELETE FROM list_entries WHERE list_id = ?1", params![id])
                 .map_err(|error| error.to_string())?;
             for (position, entry) in list.entries.iter().enumerate() {
-                // Skip ids that are not real accounts, rather than failing the
-                // whole save on one stale reference.
                 let known: i64 = tx
                     .query_row(
                         "SELECT COUNT(*) FROM accounts WHERE id = ?1 AND owner_id = ?2",
@@ -672,7 +628,6 @@ impl Store {
             }
         }
 
-        // `active` is a single flag across this owner's lists.
         let active_id: Option<String> = tx
             .query_row(
                 "SELECT id FROM lists WHERE owner_id = ?1 ORDER BY name LIMIT 1",
@@ -704,7 +659,6 @@ impl Store {
         self.lists(owner_id)
     }
 
-    /// Empty this owner's lists, keeping the lists. Returns how many entries went.
     pub fn clear_all_lists(&self, owner_id: &str) -> Result<usize, String> {
         let removed = self
             .conn
@@ -716,8 +670,6 @@ impl Store {
             .map_err(|error| error.to_string())?;
         Ok(removed)
     }
-
-    // ---- credentials ----
 
     pub fn credentials(&self, owner_id: &str) -> Result<Option<StoredCredentials>, String> {
         let found = self
@@ -756,8 +708,6 @@ impl Store {
         Ok(())
     }
 
-    // ---- meta ----
-
     pub fn meta(&self, key: &str) -> Option<String> {
         self.conn
             .query_row(
@@ -778,8 +728,6 @@ impl Store {
             .map_err(|error| error.to_string())?;
         Ok(())
     }
-
-    // ---- runs ----
 
     pub fn start_run(&self, owner_id: &str, list_names: &str) -> Result<i64, String> {
         self.conn
@@ -826,12 +774,9 @@ impl Store {
     }
 }
 
-/// A 24-hex id in the same shape as a Mongo ObjectId, so ids stay interchangeable
-/// with anything imported.
 pub fn new_id() -> String {
     let mut bytes = [0u8; 12];
     if getrandom::getrandom(&mut bytes).is_err() {
-        // Never worth failing a write over an id.
         return format!("{:024x}", std::process::id() as u128);
     }
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -860,7 +805,6 @@ mod tests {
         Store::open_in_memory().expect("in-memory store")
     }
 
-    /// Register a second owner for isolation checks.
     fn second_owner(store: &Store) -> String {
         store
             .create_owner("9876543210", "phc-other", "salt-other")
@@ -871,14 +815,13 @@ mod tests {
     fn creates_the_schema_and_can_be_reopened() {
         let store = store();
         assert!(!store.has_owners().unwrap());
-        // migrate() runs on every open; running it again must not fail or wipe.
+
         store.migrate().unwrap();
         assert!(!store.has_owners().unwrap());
     }
 
     #[test]
     fn a_v1_database_migrates_under_a_default_owner() {
-        // Build a v1-shaped database by hand.
         let dir = std::env::temp_dir().join(format!("autodop-v1-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("v1.db");
@@ -919,14 +862,12 @@ mod tests {
         assert_eq!(auth.login_hash, "$argon2id$legacy");
         assert_eq!(auth.kdf_salt, "legacy-salt");
 
-        // Data came across and stays out of meta.
         assert_eq!(store.counts("default").unwrap().accounts, 1);
         assert_eq!(store.lists("default").unwrap().len(), 1);
         assert!(store.credentials("default").unwrap().unwrap().username == "DOP.MI777");
         assert!(store.meta("login_hash").is_none());
         assert!(store.meta("kdf_salt").is_none());
 
-        // Reopening does not migrate again or lose anything.
         let reopened = Store::open(&path).unwrap();
         assert_eq!(reopened.counts("default").unwrap().accounts, 1);
         let _ = std::fs::remove_dir_all(&dir);
@@ -946,7 +887,6 @@ mod tests {
         assert_eq!(store.counts(&other).unwrap().accounts, 1);
         assert_eq!(store.accounts(&mine).unwrap()[0]["Number"], json!("111"));
 
-        // The same list name can exist under both owners.
         store
             .save_lists(
                 &mine,
@@ -972,7 +912,6 @@ mod tests {
         assert_eq!(store.lists(&mine).unwrap().len(), 1);
         assert_eq!(store.lists(&other).unwrap().len(), 1);
 
-        // Credentials are per-owner too.
         store.set_credentials(&mine, "DOP.MI1", "tok1").unwrap();
         store.set_credentials(&other, "DOP.MI2", "tok2").unwrap();
         assert_eq!(
@@ -984,7 +923,6 @@ mod tests {
             "DOP.MI2"
         );
 
-        // One owner's replace does not touch the other's accounts.
         store.replace_accounts(&mine, &[account("333")]).unwrap();
         assert_eq!(store.counts(&mine).unwrap().accounts, 1);
         assert_eq!(store.counts(&other).unwrap().accounts, 1);
@@ -1020,7 +958,6 @@ mod tests {
         assert_eq!(read[0]["addedIn"], json!("A"));
         assert!(read[0]["_id"].as_str().unwrap().len() == 24);
 
-        // Replacing is a replace, not an append.
         store.replace_accounts(&owner, &[account("333")]).unwrap();
         assert_eq!(store.accounts(&owner).unwrap().len(), 1);
     }
@@ -1051,7 +988,7 @@ mod tests {
             store.add_account(&owner, &account("222")).is_ok(),
             "new number"
         );
-        // The same number under another owner is fine.
+
         let other = second_owner(&store);
         assert!(store.add_account(&other, &account("111")).is_ok());
     }
@@ -1326,7 +1263,6 @@ mod tests {
             "token is stored verbatim"
         );
 
-        // Overwriting keeps a single row.
         store
             .set_credentials(&owner, "DOP.MI999", "gAAAAABother")
             .unwrap();
@@ -1350,7 +1286,6 @@ mod tests {
         assert_eq!(done[0]["lists"], json!("A, B"));
         assert!(done[0]["finished_at"].is_string());
 
-        // Runs are owner-scoped.
         let other = second_owner(&store);
         assert!(store.recent_runs(&other, 10).unwrap().is_empty());
     }
@@ -1366,7 +1301,7 @@ mod tests {
             store.meta("atlas_imported_at"),
             Some("2026-10-01T00:00:00Z".to_string())
         );
-        // Overwriting, not duplicating.
+
         store
             .set_meta("atlas_imported_at", "2026-10-02T00:00:00Z")
             .unwrap();

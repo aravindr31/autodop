@@ -1,13 +1,7 @@
-//! Settings from the environment or a `.env` file.
-//!
-//! Deliberately the only place that knows about `.env` files: values are looked
-//! up (or hydrated into the process environment) here, and everything else asks
-//! for a key by name.
-
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
-/// Places a `.env` may live, in order of preference.
+
 pub fn env_file_candidates(app: Option<&AppHandle>) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(explicit) = std::env::var("AUTODOP_ENV_FILE") {
@@ -15,12 +9,12 @@ pub fn env_file_candidates(app: Option<&AppHandle>) -> Vec<PathBuf> {
             paths.push(PathBuf::from(explicit.trim()));
         }
     }
-    // Dev layout: <repo>/src-tauri/.env and <repo>/.env
+
     if let Some(manifest) = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent() {
         paths.push(manifest.join("src-tauri").join(".env"));
         paths.push(manifest.join(".env"));
     }
-    // Packaged app: the OS config directory.
+
     if let Some(handle) = app {
         if let Ok(dir) = handle.path().app_config_dir() {
             paths.push(dir.join(".env"));
@@ -51,7 +45,7 @@ fn parse_env_file(path: &Path) -> Vec<(String, String)> {
     pairs
 }
 
-/// Resolve a setting: environment wins, then the first `.env` that defines it.
+
 pub fn setting(app: Option<&AppHandle>, key: &str) -> Option<String> {
     if let Ok(value) = std::env::var(key) {
         let value = value.trim().to_string();
@@ -69,12 +63,12 @@ pub fn setting(app: Option<&AppHandle>, key: &str) -> Option<String> {
     None
 }
 
-/// Copy every `.env` entry into the process environment, without clobbering a
-/// variable that is already set.
-///
-/// [`setting`] only *looks up* `.env` values, so anything read straight from
-/// `std::env` — `AUTODOP_PYTHON`, `AUTODOP_SCRAPER` — would otherwise ignore the
-/// file entirely and silently fall back to `python3` on `PATH`.
+
+
+
+
+
+
 pub fn hydrate_env(app: &AppHandle) {
     for path in env_file_candidates(Some(app)) {
         for (key, value) in parse_env_file(&path) {
@@ -85,11 +79,11 @@ pub fn hydrate_env(app: &AppHandle) {
     }
 }
 
-/// A configured encryption key, if there is one.
-///
-/// Note this is *only* the configured value. The app's own fallback — a key
-/// generated into the app-config folder on first use — lives in `lib.rs`, so a
-/// missing `FERNET_KEY` stays distinguishable from a wrong one.
+
+
+
+
+
 pub fn fernet_key(app: Option<&AppHandle>) -> Option<String> {
     setting(app, "FERNET_KEY").filter(|key| !key.trim().is_empty())
 }

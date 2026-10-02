@@ -1,8 +1,3 @@
-/**
- * List management side panel (spec §3.2). Lists are the unit of organization:
- * create, select (persists as the active list), rename and delete. On mobile
- * this panel is shown inside a slide-over drawer (see App.tsx).
- */
 import { useState } from 'react';
 import { useStore } from '../lib/store';
 import { Plus, Pencil, X, Check, Trash } from 'lucide-react';
@@ -42,9 +37,9 @@ function ListRow({
     <li className={active
       ? 'group relative rounded-lg bg-indigo-50 text-indigo-800 shadow-sm'
       : 'group relative rounded-lg bg-white text-slate-700 hover:bg-slate-50'}>
-      {/* pr-16 reserves the strip the rename/delete chip floats over (2 × 24px
-          buttons + gap, inset 6px ≈ 58px), so the count badge is not hidden
-          underneath the delete cross. */}
+      {
+
+}
       <button
         type="button"
         onClick={select}
@@ -110,14 +105,14 @@ function ListRow({
   );
 }
 
-/** Pure list UI — reused on desktop (inline aside) and mobile (drawer). */
+
 export function SidebarPanel({ onNavigate }: { onNavigate: () => void }): React.ReactElement {
   const lists = useStore((s) => s.lists);
   const activeId = useStore((s) => s.activeListId);
   const store = useStore.getState();
   const [confirmingClear, setConfirmingClear] = useState(false);
 
-  // New lists get the next free letter (A, B, C …) and lists render alphabetically.
+
   const sorted = [...lists].sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
   const totalAccounts = lists.reduce((sum, list) => sum + list.accountIds.length, 0);
 
@@ -193,7 +188,7 @@ export function SidebarPanel({ onNavigate }: { onNavigate: () => void }): React.
   );
 }
 
-/** Wraps SidebarPanel for the mobile slide-over drawer. */
+
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }): React.ReactElement {
   if (!open) return <span className="hidden" />;
   return (

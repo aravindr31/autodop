@@ -1,17 +1,6 @@
-/**
- * AutoDOP store smoke test — runs the REAL src/lib/store.ts (bundled by
- * scripts/run-smoke.mjs) in Node and exercises every store action +
- * localStorage persistence. Two stages in one process:
- *
- *   stage 1  fresh storage -> mutate -> assert live state + persisted blob
- *   stage 2  fresh re-import of the store (cache-busting query) -> assert that
- *            the earlier state was restored from localStorage
- *
- * Exported as runSmoke(); invoked via `npm run smoke`.
- */
 const BUNDLE = process.env.AUTODOP_SMOKE_DIR ?? new URL('./smoke-bundle', import.meta.url).pathname;
 
-// ---- localStorage shim (in-memory) — must be set before the store is imported ----
+
 const mem = {};
 globalThis.localStorage = {
   getItem: (k) => (k in mem ? mem[k] : null),
@@ -33,11 +22,11 @@ export async function runSmoke() {
 
   const storeMod = await import(`${BUNDLE}/store.mjs`);
   const store = storeMod.useStore;
-  // zustand swaps the whole state object on `set` — always read a fresh
-  // snapshot. Actions (below) are stable references, so keep calling those.
+
+
   const live = () => store.getState();
 
-  // ---- stage 1: fresh store, mutate, assert ----
+
   console.log('--- STAGE 1: fresh state, mutate ---');
   const s0 = live();
   check('fresh: one default list', s0.lists.length === 1, `lists=${s0.lists.length}`);
@@ -66,7 +55,7 @@ export async function runSmoke() {
   check('add: totals count=1', live().totalsOf(vipId).count === 1, `count=${live().totalsOf(vipId).count}`);
   check('add: totals amount=denom', live().totalsOf(vipId).amount === denom, `amount=${live().totalsOf(vipId).amount} denom=${denom}`);
 
-  s.addToActive(acc._id); // duplicate -> must be a no-op
+  s.addToActive(acc._id);
   check('noop: duplicate add ignored', live().lists.find((l) => l.id === vipId).accountIds.length === 1);
 
   const acc2 = SEED_ACCOUNTS.find((a) => a._id !== acc._id);
@@ -83,8 +72,8 @@ export async function runSmoke() {
   s.clearList(vipId);
   check('clear: VIP empty', live().totalsOf(vipId).count === 0);
 
-  // Clearing must drop the rebates too, or re-adding the same account would
-  // resurrect the old value.
+
+
   s.setActiveList(vipId);
   s.addToActive(acc._id);
   s.setRebate(vipId, acc._id, 3);
@@ -92,7 +81,7 @@ export async function runSmoke() {
   s.clearList(vipId);
   check('clear: rebates dropped with the accounts', live().lists.find((l) => l.id === vipId).rebates?.[acc._id] === undefined);
 
-  // ---- clear every list at once ----
+
   const mainList = live().lists.find((l) => l.name === 'A');
   s.setActiveList(mainList.id);
   s.addToActive(acc._id);
@@ -105,7 +94,7 @@ export async function runSmoke() {
   check('clearAll: accounts are untouched', live().accounts.length > 0, `n=${live().accounts.length}`);
   check('clearAll: safe when already empty', s.clearAllLists() === 0);
 
-  // ---- account mutations ----
+
   const added = s.addAccount({ Number: '9999000011', Name: 'NEW Sample', Denomination: '50', CNumber: 'CN-1', Ref_Number: 'REF-1' });
   check('addAccount: id assigned', typeof added._id === 'string' && added._id.length > 0);
   check('addAccount: in store', live().accounts.some((a) => a._id === added._id));
@@ -117,8 +106,8 @@ export async function runSmoke() {
   check('deleteAccount: pulled from lists', !live().isAdded(added._id));
   check('deleteAccount: unknown id -> false', s.deleteAccount('nope') === false);
 
-  // ---- auth (client-side gate; in the desktop flow this also carries the
-  // DOP portal id, but this smoke exercises the browser fallback) ----
+
+
   await s.setupPassword('9440000000', 'hunter2');
   check('auth: setup sets credential', live().auth !== null);
   check('auth: setup logs in', live().loggedIn === true);
@@ -136,12 +125,12 @@ export async function runSmoke() {
   );
 
   s.setActiveList(vipId);
-  s.addToActive(acc._id); // re-add so stage 2 has something to restore
+  s.addToActive(acc._id);
   check('endpoint: trims', (s.setSubmitEndpoint('  https://x  '), live().submitEndpoint) === 'https://x');
   s.setSubmitEndpoint('https://api.example/v1/batch');
   check('endpoint: persisted value', live().submitEndpoint === 'https://api.example/v1/batch');
 
-  // persistence blob (subscribe writes on every mutation)
+
   const blobTxt = mem['autodop-state-v1'] ?? '';
   const blob = JSON.parse(blobTxt);
   check('persist: blob written', Boolean(blobTxt));
@@ -157,7 +146,7 @@ export async function runSmoke() {
     blob.auth && typeof blob.auth.salt === 'string' && typeof blob.auth.hash === 'string',
   );
 
-  // ---- stage 2: fresh store instance => state restored from localStorage ----
+
   console.log('\n--- STAGE 2: reload persisted state ---');
   const s2 = (await import(`${BUNDLE}/store.mjs?t=${Date.now()}`)).useStore.getState();
   check('reload: 3 lists restored', s2.lists.length === 3, `n=${s2.lists.length}`);

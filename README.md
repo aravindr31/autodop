@@ -1,7 +1,7 @@
 # AutoDOP
 
-Desktop app (macOS / Windows) for managing India Post DOP agent account lists
-and driving the DOP portal with Selenium.
+Desktop app (macOS / Windows / Linux) for managing India Post DOP agent account
+lists and driving the DOP portal with Selenium.
 
 - `frontend/` — Astro + React + Tailwind UI (account browser, lists, manage panel)
 - `src-tauri/` — Tauri (Rust) desktop backend; runs `scraper.py` locally
@@ -31,6 +31,43 @@ Build a distributable:
 ```bash
 npm run build               # macOS: .app/.dmg   Windows: .msi/.exe
 ```
+
+## Versioning, commits & releases
+
+The pipeline builds itself from how you commit — no manual version bumps.
+
+**Conventional commits.** Every commit message starts with a type:
+
+| Type | Version effect |
+| --- | --- |
+| `fix: …` | patch (0.6.1 → 0.6.2) |
+| `feat: …` | minor (0.6.1 → 0.7.0) |
+| `…!: …` or a `BREAKING CHANGE` footer | major (0.6.1 → 1.0.0) |
+| `chore:` `docs:` `ci:` `refactor:` … | no effect on its own |
+
+```bash
+git commit -m "feat: add a notes field per account"
+git commit -m "fix: keep the rebate when a list is renamed"
+```
+
+**Branches & PRs.** Work happens on `feature/*` / `fix/*` / `hotfix/*` branches —
+CI rejects PRs to `main` from any other branch. A merge to `main` is what ships.
+
+**Release flow (automatic on merge to `main`):**
+
+1. `test` runs the full suite on the merge commit — nothing ships failing.
+2. The next version is derived from the commit messages since the last release
+   (`scripts/release-version.mjs`) and written into `VERSION`, `CHANGELOG.md`
+   and all four version fields. That lands as a
+   `chore(release): vX.Y.Z [skip ci]` commit and is tagged `vX.Y.Z`.
+3. Three runners build macOS (verified DMG), Windows (NSIS/MSI) and Linux
+   (AppImage/deb) from exactly that tagged commit, and attach the installers
+   to the GitHub release with the changelog section as the notes.
+
+You never edit the version by hand; `npm run version:bump -- X.Y.Z` still
+exists for local builds. Merges that only touch `README.md`, `CHANGELOG.md`,
+`VERSION`, `.github/**`, `docs/**` or other markdown skip the release
+workflow entirely.
 
 ## Generating lists
 

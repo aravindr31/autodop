@@ -1,13 +1,3 @@
-//! Backup / restore of the local SQLite database.
-//!
-//! A backup is a plain copy of `autodop.db` made with SQLite's own backup
-//! API — which matters because the store runs in WAL mode and a raw `cp` of
-//! the main file can miss pages still sitting in `-wal`. The backup carries
-//! the accounts, lists, the encrypted DOP password, and the login hash +
-//! KDF salt, so restoring it is only safe together with the login password
-//! that key was derived from. That is the documented caveat: *the backup is
-//! the database file plus you remembering the password.*
-
 use crate::store::Store;
 use rusqlite::backup::Backup;
 use rusqlite::{Connection, OpenFlags};
@@ -16,8 +6,6 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-/// What a database file holds — shown in the UI before a restore, so you can
-/// see what you are about to replace the live data with.
 #[derive(Debug, Serialize, Default, PartialEq)]
 pub struct Snapshot {
     pub accounts: i64,
@@ -26,8 +14,6 @@ pub struct Snapshot {
     pub has_credentials: bool,
 }
 
-/// Every AutoDOP database has a `meta` table; anything without one is not
-/// ours, and must not be restored over live data or clobbered by an export.
 fn require_autodop(conn: &Connection, path: &Path) -> Result<(), String> {
     let found: i64 = conn
         .query_row(
@@ -59,7 +45,6 @@ fn open_read_only(path: &Path) -> Result<Connection, String> {
         .map_err(|error| format!("cannot open {}: {error}", path.display()))
 }
 
-/// Open a file, require it to be an AutoDOP database, and count what is in it.
 pub fn inspect(path: &Path) -> Result<Snapshot, String> {
     let conn = open_read_only(path)?;
     require_autodop(&conn, path)?;
@@ -77,9 +62,6 @@ pub fn inspect(path: &Path) -> Result<Snapshot, String> {
     })
 }
 
-/// Copy `source` into `destination` with SQLite's backup API, then verify the
-/// copy by reading it back. Refuses to clobber an existing file that is not
-/// an AutoDOP database — a mistyped path must not destroy unrelated data.
 pub fn export(source: &Path, destination: &Path) -> Result<Snapshot, String> {
     if destination == source {
         return Err("the backup path is the live database itself".into());
@@ -107,26 +89,12 @@ pub fn export(source: &Path, destination: &Path) -> Result<Snapshot, String> {
     Ok(snapshot)
 }
 
-// --------------------------------------------------------------------------- //
-// portable JSON backup                                                        //
-// --------------------------------------------------------------------------- //
-
-/// The JSON shape written by [`portable_export`] and read by [`portable_read`].
-///
-/// Accounts and lists travel as plain JSON so the file is inspectable. The DOP
-/// password travels as the same Fernet token the local store holds — encrypted
-/// with a key derived (Argon2id) from the **app login password** of the machine
-/// that made the backup. The importer asks for that login password, verifies it
-/// against the carried `login_hash`, decrypts the token, and re-encrypts the
-/// password under the *new* machine's login. The login password itself travels
-/// nowhere — only its PHC hash, which verifies without revealing.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PortableBackup {
     pub format: String,
     pub version: u32,
     pub created_at: String,
-    /// Accounts as the store holds them, `_id` included — list entries point
-    /// at those ids.
+
     pub accounts: Vec<Value>,
     pub lists: Vec<crate::db::DbList>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,24 +104,20 @@ pub struct PortableBackup {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PortableCredentials {
     pub username: String,
-    /// The Fernet token exactly as the local store holds it.
+
     pub token: String,
-    /// The Argon2id salt (base64) the token's key was derived from.
+
     pub salt: String,
-    /// PHC string verifying the login password that key was derived from.
+
     pub login_hash: String,
 }
 
 pub const PORTABLE_FORMAT: &str = "autodop-portable-backup";
 pub const PORTABLE_VERSION: u32 = 1;
 
-/// A wrong password is indistinguishable from a broken file here; say so.
 const PASSWORD_MISMATCH: &str =
     "that is not the app login password this backup was made with — the DOP password in it cannot be read";
 
-/// Gather the store into a [`PortableBackup`]. `credentials` is the stored
-/// credential triple (username, token, salt) plus the login hash, supplied by
-/// the caller so this stays testable; `None` when no password is stored.
 pub fn portable_backup(
     store: &Store,
     owner_id: &str,
@@ -170,7 +134,6 @@ pub fn portable_backup(
     })
 }
 
-/// Write the JSON file.
 pub fn portable_export(
     store: &Store,
     owner_id: &str,
@@ -185,16 +148,13 @@ pub fn portable_export(
     Ok(backup)
 }
 
-/// Read a JSON file, verify the shape, and verify the login password it was
-/// encrypted with.
 pub fn portable_read(source: &Path, login_password: &str) -> Result<PortableBackup, String> {
     let backup = portable_parse(source)?;
     if let Some(credentials) = &backup.credentials {
         if !crate::crypt::verify_login(login_password, &credentials.login_hash) {
             return Err(PASSWORD_MISMATCH.into());
         }
-        // The token must actually open with this password, not merely pass a
-        // stale hash — the file may have been written by a different build.
+
         let key = crate::crypt::derive_key(login_password, &credentials.salt)?;
         let password = crate::crypt::decrypt(&key, &credentials.token)
             .map_err(|_| PASSWORD_MISMATCH.to_string())?;
@@ -205,7 +165,6 @@ pub fn portable_read(source: &Path, login_password: &str) -> Result<PortableBack
     Ok(backup)
 }
 
-/// Parse and shape-check a portable backup without a password.
 pub fn portable_parse(source: &Path) -> Result<PortableBackup, String> {
     let text = std::fs::read_to_string(source)
         .map_err(|error| format!("cannot read {}: {error}", source.display()))?;
@@ -225,11 +184,6 @@ pub fn portable_parse(source: &Path) -> Result<PortableBackup, String> {
     Ok(backup)
 }
 
-/// Put a [`PortableBackup`] into `store`, replacing what is there.
-///
-/// List entries pointing at accounts that are not in the file are dropped,
-/// the same way `save_lists` handles stale references. The DOP password is
-/// imported separately by [`portable_import_credentials`].
 pub fn portable_import(
     store: &Store,
     owner_id: &str,
@@ -259,10 +213,6 @@ pub fn portable_import(
     Ok((counts.accounts, counts.lists, counts.entries))
 }
 
-/// Import the DOP password, re-encrypting it under the current login key.
-///
-/// `login_password` is the app login password of the machine that made the
-/// backup; it has already been verified by [`portable_read`].
 pub fn portable_import_credentials(
     store: &Store,
     owner_id: &str,
@@ -325,7 +275,7 @@ mod tests {
                 has_credentials: true
             }
         );
-        // Reading the copy back through the store confirms it really opens.
+
         let store = Store::open(&dst).expect("backup opens as a store");
         assert_eq!(store.counts_all().expect("counts").accounts, 2);
         assert!(store
@@ -406,8 +356,7 @@ mod tests {
                 }],
             )
             .expect("list saved");
-        // The owner's login material, the way `setup_login` writes it, and the
-        // DOP password encrypted under that login's derived key.
+
         let salt = crate::crypt::new_salt().expect("salt");
         let hash = crate::crypt::hash_login(login_password).expect("hash");
         store
@@ -421,7 +370,6 @@ mod tests {
         (store, owner)
     }
 
-    /// What the real export command assembles from the owner's row.
     fn portable_creds(store: &Store, owner: &str) -> PortableCredentials {
         let stored = store
             .credentials(owner)
@@ -451,19 +399,17 @@ mod tests {
         assert_eq!(backup.lists.len(), 1);
         assert!(backup.credentials.is_some());
 
-        // The file is plain JSON and never carries the plaintext password.
         let text = std::fs::read_to_string(&json).expect("json read");
         assert!(text.contains("autodop-portable-backup"));
         assert!(!text.contains("the-portal-password"));
 
-        // A fresh store, a different machine, a different login password.
         let fresh = Store::open(&dst).expect("fresh store");
         let new_owner = fresh
             .create_owner("8888888888", "unused", "unused")
             .expect("owner");
         let read = portable_read(&json, login_password).expect("read succeeds");
         portable_import(&fresh, &new_owner, &read).expect("import succeeds");
-        // The new machine's login-derived key is a real Fernet key.
+
         let new_key = crate::crypt::generate_key().expect("key");
         portable_import_credentials(&fresh, &new_owner, &read, login_password, &new_key)
             .expect("credentials import");
@@ -475,17 +421,15 @@ mod tests {
             .expect("creds")
             .expect("credential");
         assert_eq!(stored.username, "DOP.MI.TEST");
-        // Re-encrypted under the *new* login key, readable with it.
+
         assert_eq!(
             crate::crypt::decrypt(&new_key, &stored.token).expect("decrypts"),
             "the-portal-password"
         );
 
-        // A wrong login password is refused with the helpful message.
         let error = portable_read(&json, "wrong").expect_err("wrong password refused");
         assert!(error.contains("not the app login password"), "{error}");
 
-        // A foreign JSON file is not an AutoDOP backup.
         std::fs::write(&json, r#"{"format":"other"}"#).expect("foreign written");
         assert!(portable_read(&json, login_password).is_err());
 

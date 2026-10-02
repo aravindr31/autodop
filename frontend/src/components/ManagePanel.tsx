@@ -848,6 +848,7 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
   const store = useStore.getState();
   const accounts = useStore((s) => s.accounts);
   const lists = useStore((s) => s.lists);
+  const currentOwner = useStore((s) => s.currentOwner);
 
   return (
     <div className="fixed inset-0 z-40" role="dialog" aria-label="Manage accounts">
@@ -856,6 +857,9 @@ export default function ManagePanel({ onClose }: { onClose: () => void }): React
         <div className="flex items-center justify-between">
           <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-800">
             Manage
+            {currentOwner ? (
+              <Pill tone="neutral">{currentOwner.username}</Pill>
+            ) : null}
             <Pill tone="neutral">{accounts.length.toLocaleString('en-IN')} accounts</Pill>
             <Pill tone="neutral">{lists.length} lists</Pill>
           </span>

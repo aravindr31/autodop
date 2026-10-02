@@ -117,8 +117,9 @@ export async function runSmoke() {
   check('deleteAccount: pulled from lists', !live().isAdded(added._id));
   check('deleteAccount: unknown id -> false', s.deleteAccount('nope') === false);
 
-  // ---- auth (client-side gate) ----
-  await s.setupPassword('hunter2');
+  // ---- auth (client-side gate; in the desktop flow this also carries the
+  // DOP portal id, but this smoke exercises the browser fallback) ----
+  await s.setupPassword('9440000000', 'hunter2');
   check('auth: setup sets credential', live().auth !== null);
   check('auth: setup logs in', live().loggedIn === true);
   s.logout();

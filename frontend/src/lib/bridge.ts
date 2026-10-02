@@ -182,10 +182,19 @@ export async function saveCredentials(
   }
 }
 
-/** Whether a login password is set, and whether this session is unlocked. */
+/** One workspace known on this machine. */
+export interface OwnerInfo {
+  id: string;
+  username: string;
+  has_credentials: boolean;
+}
+
+/** Which workspaces exist, and which one this session belongs to. */
 export interface AuthStatus {
   configured: boolean;
   unlocked: boolean;
+  owners: OwnerInfo[];
+  current: string | null;
 }
 
 export async function authStatus(): Promise<AuthStatus | null> {
@@ -198,28 +207,70 @@ export async function authStatus(): Promise<AuthStatus | null> {
 }
 
 /**
- * Set the login password on first run.
+ * Create a workspace on first run: username (the DOP portal id, a mobile
+ * number) plus a login password.
  *
  * In the desktop app this also derives the key that protects the DOP password,
  * which is why the password is sent to the backend rather than hashed here.
  */
-export async function setupLogin(password: string): Promise<{ ok: boolean; error?: string }> {
+export async function setupLogin(
+  username: string,
+  password: string,
+): Promise<{ ok: boolean; error?: string; owner?: OwnerInfo }> {
   if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
   try {
-    await invoke('setup_login', { password });
-    return { ok: true };
+    const owner = await invoke<OwnerInfo>('setup_login', { username, password });
+    return { ok: true, owner };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
-/** Verify the login password and unlock the stored credential for this session. */
-export async function loginPassword(password: string): Promise<boolean> {
-  if (!isDesktop()) return false;
+/**
+ * Verify the login password for `ownerId` and unlock this session.
+ *
+ * `false` means the password was wrong; an error string means the workspace
+ * itself is gone.
+ */
+export async function loginPassword(
+  ownerId: string,
+  password: string,
+): Promise<{ ok: boolean; error?: string; owner?: OwnerInfo }> {
+  if (!isDesktop()) return { ok: false };
   try {
-    return await invoke<boolean>('login', { password });
-  } catch {
-    return false;
+    const owner = await invoke<OwnerInfo>('login', { ownerId, password });
+    return { ok: true, owner };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // A wrong password is reported as an error string by the backend; only a
+    // mismatch is "just wrong", anything else is worth surfacing.
+    if (message.includes('Incorrect password')) return { ok: false };
+    return { ok: false, error: message };
+  }
+}
+
+/** Insert or update one account under the signed-in owner. */
+export async function saveAccount(
+  account: Account,
+): Promise<{ ok: boolean; error?: string; id?: string }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return { ok: true, id: await invoke<string>('save_account', { account }) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Remove one account under the signed-in owner; list entries go with it. */
+export async function deleteAccount(
+  id: string,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    await invoke('delete_account', { id });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 

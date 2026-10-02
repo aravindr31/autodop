@@ -47,23 +47,37 @@ fn main() {
             let store = Store::open(&source).expect("live store opens");
             // The portable export needs no password: the DOP token, the salt
             // and the login hash travel as the store already holds them.
-            let credentials = store.credentials().expect("creds").and_then(|stored| {
-                Some(autodop_lib::backup::PortableCredentials {
-                    username: stored.username,
-                    token: stored.token,
-                    salt: store.meta("kdf_salt")?,
-                    login_hash: store.meta("login_hash")?,
-                })
-            });
+            let owner = store
+                .owners()
+                .expect("owners")
+                .first()
+                .map(|row| row.id.clone())
+                .expect("an owner");
+            let credentials = store
+                .credentials(&owner)
+                .expect("creds")
+                .and_then(|stored| {
+                    let auth = store.owner_auth(&owner).expect("auth")?;
+                    Some(autodop_lib::backup::PortableCredentials {
+                        username: stored.username,
+                        token: stored.token,
+                        salt: auth.kdf_salt,
+                        login_hash: auth.login_hash,
+                    })
+                });
             let written = backup::portable_export(
                 &store,
+                &owner,
                 &destination,
                 &autodop_lib::rfc3339_utc(autodop_lib::now_secs()),
                 credentials,
             )
             .expect("portable export succeeds");
             let parsed = backup::portable_parse(&destination).expect("parses back");
-            assert_eq!(parsed.accounts.len() as i64, store.counts().expect("counts").accounts);
+            assert_eq!(
+                parsed.accounts.len() as i64,
+                store.counts(&owner).expect("counts").accounts
+            );
             println!(
                 "exported: {} accounts, {} list(s), credentials: {} -> {}",
                 written.accounts.len(),
@@ -102,39 +116,44 @@ fn roundtrip() {
 
     // 1. Seed a store the way the app would have, then close it — nothing
     // may hold the live file open across the backup or the restore.
-    let ids = {
+    let owner = {
         let store = Store::open(&live).expect("store opens");
+        let owner = store
+            .create_owner("9999999999", "unused", "unused")
+            .expect("owner");
         store
-            .replace_accounts(&[
+            .replace_accounts(&owner, &[
             json!({"_id": "probe-acc-1", "Number": "4999087654321", "Name": "Probe One", "Denomination": 100}),
             json!({"_id": "probe-acc-2", "Number": "4999087654322", "Name": "Probe Two", "Denomination": "100"}),
             json!({"_id": "probe-acc-3", "Number": "4999087654323", "Name": "Probe Three", "Denomination": 200}),
         ])
             .expect("accounts saved");
         store
-            .save_lists(&[autodop_lib::db::InputList {
-                id: String::new(),
-                name: "PROBE LIST".into(),
-                active: true,
-                entries: vec![
-                    autodop_lib::db::InputEntry {
-                        id: "probe-acc-1".into(),
-                        rebate: 1,
-                    },
-                    autodop_lib::db::InputEntry {
-                        id: "probe-acc-2".into(),
-                        rebate: 1,
-                    },
-                ],
-            }])
+            .save_lists(
+                &owner,
+                &[autodop_lib::db::InputList {
+                    id: String::new(),
+                    name: "PROBE LIST".into(),
+                    active: true,
+                    entries: vec![
+                        autodop_lib::db::InputEntry {
+                            id: "probe-acc-1".into(),
+                            rebate: 1,
+                        },
+                        autodop_lib::db::InputEntry {
+                            id: "probe-acc-2".into(),
+                            rebate: 1,
+                        },
+                    ],
+                }],
+            )
             .expect("list saved");
         store
-            .set_credentials("DOP.MI.PROBE", "fernet-token-never-shown")
+            .set_credentials(&owner, "DOP.MI.PROBE", "fernet-token-never-shown")
             .expect("credential saved");
         println!("seeded: 3 accounts, 1 list with 2 entries, 1 credential");
-        store
+        owner
     };
-    drop(ids);
 
     // 2. Back it up.
     let snapshot = backup::export(&live, &backup_path).expect("export succeeds");
@@ -143,11 +162,11 @@ fn roundtrip() {
     // 3. Wreck the live one, in its own scope.
     {
         let store = Store::open(&live).expect("store reopens");
-        store.clear_all_lists().expect("lists cleared");
+        store.clear_all_lists(&owner).expect("lists cleared");
         store
-            .delete_account("probe-acc-1")
+            .delete_account(&owner, "probe-acc-1")
             .expect("account deleted");
-        let before = store.counts().expect("counts");
+        let before = store.counts(&owner).expect("counts");
         println!("damaged: {before:?}");
     }
 
@@ -161,8 +180,8 @@ fn roundtrip() {
         let _ = std::fs::remove_file(dir.join(format!("autodop.db{sidecar}")));
     }
     let restored = Store::open(&live).expect("restored store opens");
-    let after = restored.counts().expect("counts");
-    let credentials = restored.credentials().expect("credentials read");
+    let after = restored.counts(&owner).expect("counts");
+    let credentials = restored.credentials(&owner).expect("credentials read");
     println!(
         "restored: {after:?}, credential present: {}",
         credentials.is_some()

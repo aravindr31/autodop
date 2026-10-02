@@ -402,13 +402,17 @@ fn read_key_file(path: &Path) -> Option<String> {
 /// stored DOP password is useless to anyone who copies `autodop.db`, because the
 /// key that opens it exists only while someone is signed in.
 #[derive(Default)]
-struct Unlock(Mutex<Option<String>>);
+struct Unlock(Mutex<Option<Session>>);
 
-const META_LOGIN_HASH: &str = "login_hash";
-const META_KDF_SALT: &str = "kdf_salt";
+/// Who is signed in, and the key their login derived.
+#[derive(Clone)]
+struct Session {
+    owner_id: String,
+    key: String,
+}
 
-/// The key for this session, if unlocked.
-fn unlocked_key(app: &AppHandle) -> Option<String> {
+/// The signed-in session, if any.
+fn current_session(app: &AppHandle) -> Option<Session> {
     app.state::<Unlock>()
         .0
         .lock()
@@ -416,9 +420,21 @@ fn unlocked_key(app: &AppHandle) -> Option<String> {
         .and_then(|slot| slot.clone())
 }
 
-fn set_unlocked_key(app: &AppHandle, key: String) {
+/// The signed-in owner's id, or an error asking for one.
+fn current_owner(app: &AppHandle) -> Result<String, String> {
+    current_session(app)
+        .map(|session| session.owner_id)
+        .ok_or_else(|| "Sign in first.".into())
+}
+
+/// The key for this session, if unlocked.
+fn unlocked_key(app: &AppHandle) -> Option<String> {
+    current_session(app).map(|session| session.key)
+}
+
+fn set_unlocked_session(app: &AppHandle, session: Session) {
     if let Ok(mut slot) = app.state::<Unlock>().0.lock() {
-        *slot = Some(key);
+        *slot = Some(session);
     }
 }
 
@@ -428,13 +444,19 @@ fn clear_unlocked_key(app: &AppHandle) {
     }
 }
 
-/// Derive the key from `password` with the stored salt, and hold it.
-fn unlock_with(app: &AppHandle, password: &str) -> Result<String, String> {
-    let salt = open_store(app)?
-        .meta(META_KDF_SALT)
-        .ok_or("no key salt is stored — set the login password first")?;
-    let key = crypt::derive_key(password, &salt)?;
-    set_unlocked_key(app, key.clone());
+/// Derive the key from `password` with the owner's salt, and hold the session.
+fn unlock_with(app: &AppHandle, owner_id: &str, password: &str) -> Result<String, String> {
+    let auth = open_store(app)?
+        .owner_auth(owner_id)?
+        .ok_or("that workspace no longer exists")?;
+    let key = crypt::derive_key(password, &auth.kdf_salt)?;
+    set_unlocked_session(
+        app,
+        Session {
+            owner_id: owner_id.to_string(),
+            key: key.clone(),
+        },
+    );
     Ok(key)
 }
 
@@ -459,9 +481,10 @@ fn legacy_keys(app: &AppHandle) -> Vec<String> {
 ///
 /// Without this an upgrade would leave the stored DOP password readable only by
 /// a key nothing uses any more — which is to say, unreadable.
-fn migrate_credential(app: &AppHandle, key: &str) -> Result<bool, String> {
+fn migrate_credential(app: &AppHandle, owner_id: &str) -> Result<bool, String> {
+    let key = unlocked_key(app).ok_or("Sign in first.")?;
     let store = open_store(app)?;
-    let migrated = migrate_credential_with(&store, key, &legacy_keys(app))?;
+    let migrated = migrate_credential_with(&store, owner_id, &key, &legacy_keys(app))?;
     if migrated {
         // The old key file has no further use, and leaving it behind would keep
         // a copy of the secret's key on disk for no reason.
@@ -475,10 +498,11 @@ fn migrate_credential(app: &AppHandle, key: &str) -> Result<bool, String> {
 /// The migration itself, free of the app handle so it can be tested.
 fn migrate_credential_with(
     store: &store::Store,
+    owner_id: &str,
     key: &str,
     legacy: &[String],
 ) -> Result<bool, String> {
-    let Some(stored) = store.credentials()? else {
+    let Some(stored) = store.credentials(owner_id)? else {
         return Ok(false);
     };
     // Already under the derived key: nothing to do.
@@ -488,7 +512,7 @@ fn migrate_credential_with(
 
     for old in legacy {
         if let Ok(plain) = crypt::decrypt(old, &stored.token) {
-            store.set_credentials(&stored.username, &crypt::encrypt(key, &plain)?)?;
+            store.set_credentials(owner_id, &stored.username, &crypt::encrypt(key, &plain)?)?;
             return Ok(true);
         }
     }
@@ -533,9 +557,10 @@ fn env_credentials() -> Option<db::DopCredentials> {
     })
 }
 
-/// The DOP pair stored in the local database — the normal case.
+/// The DOP pair stored in the local database for the signed-in owner.
 fn sqlite_credentials(app: &AppHandle) -> Option<db::DopCredentials> {
-    let stored = open_store(app).ok()?.credentials().ok().flatten()?;
+    let owner = current_owner(app).ok()?;
+    let stored = open_store(app).ok()?.credentials(&owner).ok().flatten()?;
     let password = decrypt_stored(app, &stored.token)?;
     if stored.username.trim().is_empty() || password.trim().is_empty() {
         return None;
@@ -693,12 +718,13 @@ fn set_credentials(
 
     // Encrypted with the key derived from the login password, so it can only be
     // written while signed in — and the key itself is never stored.
+    let owner = current_owner(&app)?;
     let key = unlocked_key(&app).ok_or(
         "Sign in first — the DOP password is encrypted with a key derived from your password.",
     )?;
     let token = crypt::encrypt(&key, &password)?;
 
-    open_store(&app)?.set_credentials(&username, &token)?;
+    open_store(&app)?.set_credentials(&owner, &username, &token)?;
 
     Ok(SavedCredentials {
         stored_encrypted: true,
@@ -706,61 +732,96 @@ fn set_credentials(
     })
 }
 
-/// Whether a login password is set, and whether this session is unlocked.
+/// One known workspace on this machine.
+#[derive(Debug, Serialize)]
+pub struct OwnerInfo {
+    pub id: String,
+    pub username: String,
+    pub has_credentials: bool,
+}
+
+/// Whether any workspace exists, and which one this session belongs to.
 #[derive(Debug, Serialize)]
 pub struct AuthStatus {
     pub configured: bool,
     pub unlocked: bool,
+    pub owners: Vec<OwnerInfo>,
+    pub current: Option<String>,
 }
 
 #[tauri::command]
 fn auth_status(app: AppHandle) -> AuthStatus {
-    let configured = open_store(&app)
-        .ok()
-        .and_then(|store| store.meta(META_LOGIN_HASH))
-        .is_some();
+    let store = open_store(&app);
+    let owners = store
+        .as_ref()
+        .map(|store| store.owners().unwrap_or_default())
+        .unwrap_or_default();
+    let current = current_session(&app).map(|session| session.owner_id);
     AuthStatus {
-        configured,
-        unlocked: unlocked_key(&app).is_some(),
+        configured: !owners.is_empty(),
+        unlocked: current.is_some(),
+        owners: owners
+            .into_iter()
+            .map(|row| OwnerInfo {
+                id: row.id,
+                username: row.username,
+                has_credentials: row.has_credential,
+            })
+            .collect(),
+        current,
     }
 }
 
-/// Set the login password on first run, and unlock with it.
+/// Create a workspace on first run — username (the DOP portal id, a mobile
+/// number) plus a login password — and sign into it.
 #[tauri::command]
-fn setup_login(app: AppHandle, password: String) -> Result<(), String> {
+fn setup_login(app: AppHandle, username: String, password: String) -> Result<OwnerInfo, String> {
+    let username = username.trim().to_string();
+    if username.is_empty() {
+        return Err("The username (your DOP portal id) is required.".into());
+    }
     if password.is_empty() {
         return Err("The password cannot be empty.".into());
     }
     let store = open_store(&app)?;
-    if store.meta(META_LOGIN_HASH).is_some() {
-        return Err("A login password is already set — sign in instead.".into());
-    }
-    store.set_meta(META_LOGIN_HASH, &crypt::hash_login(&password)?)?;
-    store.set_meta(META_KDF_SALT, &crypt::new_salt()?)?;
-    let key = unlock_with(&app, &password)?;
+    let owner_id = store.create_owner(
+        &username,
+        &crypt::hash_login(&password)?,
+        &crypt::new_salt()?,
+    )?;
+    unlock_with(&app, &owner_id, &password)?;
     // An install upgrading from the old key file has its DOP password under a
     // key nothing uses any more; move it across now.
-    let _ = migrate_credential(&app, &key);
-    Ok(())
+    let _ = migrate_credential(&app, &owner_id);
+    Ok(OwnerInfo {
+        id: owner_id,
+        username,
+        has_credentials: false,
+    })
 }
 
-/// Verify the login password, derive the key, and migrate an old credential.
-///
-/// `Ok(false)` means the password was simply wrong — not an error.
+/// Verify the login password for `owner_id`, derive the key, and migrate an
+/// old credential. `Ok(false)` means the password was simply wrong.
 #[tauri::command]
-fn login(app: AppHandle, password: String) -> Result<bool, String> {
+fn login(app: AppHandle, owner_id: String, password: String) -> Result<OwnerInfo, String> {
     let store = open_store(&app)?;
-    let Some(phc) = store.meta(META_LOGIN_HASH) else {
-        return Err("No login password is set yet.".into());
+    let Some(auth) = store.owner_auth(&owner_id)? else {
+        return Err("That workspace no longer exists on this machine.".into());
     };
-    if !crypt::verify_login(&password, &phc) {
+    if !crypt::verify_login(&password, &auth.login_hash) {
         clear_unlocked_key(&app);
-        return Ok(false);
+        return Err("Incorrect password.".into());
     }
-    let key = unlock_with(&app, &password)?;
+    unlock_with(&app, &owner_id, &password)?;
+    store.touch_owner(&owner_id)?;
     // A credential written under the old key file is re-encrypted here, once.
-    let _ = migrate_credential(&app, &key);
-    Ok(true)
+    let _ = migrate_credential(&app, &owner_id);
+    let has_credentials = store.credentials(&owner_id)?.is_some();
+    Ok(OwnerInfo {
+        id: owner_id,
+        username: auth.username,
+        has_credentials,
+    })
 }
 
 /// Forget the key for this session.
@@ -784,11 +845,12 @@ fn change_login_password(
         return Err("The new password cannot be empty.".into());
     }
 
+    let owner = current_owner(&app)?;
     let store = open_store(&app)?;
-    let Some(phc) = store.meta(META_LOGIN_HASH) else {
+    let Some(auth) = store.owner_auth(&owner)? else {
         return Err("No login password is set yet.".into());
     };
-    if !crypt::verify_login(&old_password, &phc) {
+    if !crypt::verify_login(&old_password, &auth.login_hash) {
         return Err("The current password is not right.".into());
     }
     let current = unlocked_key(&app).ok_or("Sign in first, then change the password.")?;
@@ -797,16 +859,21 @@ fn change_login_password(
     let salt = crypt::new_salt()?;
     let new_key = crypt::derive_key(&new_password, &salt)?;
 
-    if let Some(stored) = store.credentials()? {
+    if let Some(stored) = store.credentials(&owner)? {
         let plain = crypt::decrypt(&current, &stored.token).map_err(|_| {
             "The stored DOP password could not be read with the current key.".to_string()
         })?;
-        store.set_credentials(&stored.username, &crypt::encrypt(&new_key, &plain)?)?;
+        store.set_credentials(&owner, &stored.username, &crypt::encrypt(&new_key, &plain)?)?;
     }
 
-    store.set_meta(META_LOGIN_HASH, &crypt::hash_login(&new_password)?)?;
-    store.set_meta(META_KDF_SALT, &salt)?;
-    set_unlocked_key(&app, new_key);
+    store.set_owner_auth(&owner, &crypt::hash_login(&new_password)?, &salt)?;
+    set_unlocked_session(
+        &app,
+        Session {
+            owner_id: owner,
+            key: new_key,
+        },
+    );
     Ok(())
 }
 
@@ -898,9 +965,11 @@ async fn generate_lists(app: AppHandle, lists: Vec<GenList>) -> GenResult {
 
     // Record the attempt before it starts, so a crash still leaves a trace of
     // what was asked for.
-    let run_id = open_store(&app)
-        .ok()
-        .and_then(|store| store.start_run(&names.join(", ")).ok());
+    let run_id = open_store(&app).ok().and_then(|store| {
+        current_owner(&app)
+            .ok()
+            .and_then(|owner| store.start_run(&owner, &names.join(", ")).ok())
+    });
 
     let app_for_run = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -1139,12 +1208,11 @@ fn local_status(app: AppHandle) -> LocalStatus {
     };
 
     match open_store(&app) {
-        Ok(store) => match store.counts() {
+        Ok(store) => match current_owner(&app).and_then(|owner| store.counts(&owner)) {
             Ok(counts) => {
-                let has_credentials = store
-                    .credentials()
+                let has_credentials = current_owner(&app)
                     .ok()
-                    .flatten()
+                    .and_then(|owner| store.credentials(&owner).ok().flatten())
                     .is_some_and(|stored| !stored.token.trim().is_empty());
                 LocalStatus {
                     path: path.display().to_string(),
@@ -1164,19 +1232,62 @@ fn local_status(app: AppHandle) -> LocalStatus {
 /// Load every account from the local database.
 #[tauri::command]
 fn load_accounts(app: AppHandle) -> Result<Vec<Value>, String> {
-    open_store(&app)?.accounts()
+    open_store(&app)?.accounts(&current_owner(&app)?)
 }
 
 /// Load the lists (and per-account rebates) from the local database.
 #[tauri::command]
 fn load_lists(app: AppHandle) -> Result<Vec<db::DbList>, String> {
-    open_store(&app)?.lists()
+    open_store(&app)?.lists(&current_owner(&app)?)
 }
 
 /// Upsert the supplied lists locally and return what is now stored.
 #[tauri::command]
 fn save_lists(app: AppHandle, lists: Vec<db::InputList>) -> Result<Vec<db::DbList>, String> {
-    open_store(&app)?.save_lists(&lists)
+    open_store(&app)?.save_lists(&current_owner(&app)?, &lists)
+}
+
+/// Insert or update one account for the signed-in owner.
+#[tauri::command]
+fn save_account(app: AppHandle, account: Value) -> Result<String, String> {
+    let owner = current_owner(&app)?;
+    let store = open_store(&app)?;
+    let number = account
+        .get("Number")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if number.is_empty() {
+        return Err("Account number is required.".into());
+    }
+    // An existing row with the same number under this owner is updated in
+    // place; a new number is inserted.
+    let existing: Option<String> = {
+        let id = account.get("_id").and_then(Value::as_str).unwrap_or("");
+        if id.is_empty() {
+            store
+                .accounts(&owner)?
+                .into_iter()
+                .find(|row| row.get("Number").and_then(Value::as_str) == Some(number.as_str()))
+                .and_then(|row| row.get("_id").and_then(Value::as_str).map(str::to_string))
+        } else {
+            Some(id.to_string())
+        }
+    };
+    let mut row = account.clone();
+    if let Some(id) = &existing {
+        row["_id"] = Value::String(id.clone());
+    } else {
+        row["_id"] = Value::String(String::new());
+    }
+    store.add_account(&owner, &row)
+}
+
+/// Remove one account; its list entries go with it.
+#[tauri::command]
+fn delete_account(app: AppHandle, id: String) -> Result<bool, String> {
+    open_store(&app)?.delete_account(&current_owner(&app)?, &id)
 }
 
 // --------------------------------------------------------------------------- //
@@ -1276,7 +1387,7 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     // Read the result back through a real store; if the counts disagree the
     // safety copy is still sitting next to it.
     let store = open_store(&app)?;
-    let counts = store.counts()?;
+    let counts = store.counts_all()?;
     if counts.accounts != snapshot.accounts
         || counts.lists != snapshot.lists
         || counts.entries != snapshot.entries
@@ -1322,27 +1433,30 @@ fn export_portable_backup(app: AppHandle, path: String) -> Result<BackupOutcome,
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
     }
+    let owner = current_owner(&app)?;
     let store = open_store(&app)?;
-    let credentials = match store.credentials()? {
+    let credentials = match store.credentials(&owner)? {
         Some(stored) if !stored.token.trim().is_empty() => {
-            let salt = store
-                .meta(META_KDF_SALT)
-                .ok_or("no KDF salt in the database — save the DOP password again")?;
-            let login_hash = store
-                .meta(META_LOGIN_HASH)
-                .ok_or("no login hash in the database — save the DOP password again")?;
+            let auth = store
+                .owner_auth(&owner)?
+                .ok_or("this workspace has no login record")?;
             Some(backup::PortableCredentials {
                 username: stored.username,
                 token: stored.token,
-                salt,
-                login_hash,
+                salt: auth.kdf_salt,
+                login_hash: auth.login_hash,
             })
         }
         _ => None,
     };
-    let written =
-        backup::portable_export(&store, &destination, &rfc3339_utc(now_secs()), credentials)
-            .map_err(fs_hint)?;
+    let written = backup::portable_export(
+        &store,
+        &owner,
+        &destination,
+        &rfc3339_utc(now_secs()),
+        credentials,
+    )
+    .map_err(fs_hint)?;
     Ok(BackupOutcome {
         accounts: written.accounts.len() as i64,
         lists: written.lists.len() as i64,
@@ -1371,13 +1485,14 @@ fn import_portable_backup(
     let safety = live.with_extension(format!("db.pre-restore-{}", compact_timestamp(now_secs())));
     backup::export(&live, &safety).map_err(fs_hint)?;
 
+    let owner = current_owner(&app)?;
     let store = open_store(&app)?;
-    let (accounts, lists, entries) = backup::portable_import(&store, &backup)?;
+    let (accounts, lists, entries) = backup::portable_import(&store, &owner, &backup)?;
     let mut has_credentials = false;
     if backup.credentials.is_some() {
         let key = unlocked_key(&app)
             .ok_or("Sign in first — the DOP password is re-encrypted with your login's key.")?;
-        backup::portable_import_credentials(&store, &backup, &login_password, &key)?;
+        backup::portable_import_credentials(&store, &owner, &backup, &login_password, &key)?;
         has_credentials = true;
     }
     Ok(BackupOutcome {
@@ -1434,6 +1549,8 @@ pub fn run() {
             load_accounts,
             load_lists,
             save_lists,
+            save_account,
+            delete_account,
             export_backup,
             import_backup,
             export_portable_backup,
@@ -1526,42 +1643,52 @@ mod tests {
 
     #[test]
     fn migrates_a_credential_from_the_old_key_file() {
+        // Credentials reference an owner row; make one.
         let store = store::Store::open_in_memory().unwrap();
+        let owner = store.create_owner("9999999999", "h", "s").unwrap();
         let old = crypt::generate_key().unwrap();
         let new = crypt::derive_key("my login password", &crypt::new_salt().unwrap()).unwrap();
 
         // Written under the old key, as an upgrading install has it.
         store
-            .set_credentials("DOP.MI1", &crypt::encrypt(&old, "portal-secret").unwrap())
+            .set_credentials(
+                &owner,
+                "DOP.MI1",
+                &crypt::encrypt(&old, "portal-secret").unwrap(),
+            )
             .unwrap();
-        let before = store.credentials().unwrap().unwrap();
+        let before = store.credentials(&owner).unwrap().unwrap();
         assert!(
             crypt::decrypt(&new, &before.token).is_err(),
             "the new key must not open the old ciphertext"
         );
 
         // Offered the old key as a legacy source, it moves across.
-        assert!(migrate_credential_with(&store, &new, &[old]).unwrap());
-        let after = store.credentials().unwrap().unwrap();
+        assert!(migrate_credential_with(&store, &owner, &new, &[old]).unwrap());
+        let after = store.credentials(&owner).unwrap().unwrap();
         assert_eq!(crypt::decrypt(&new, &after.token).unwrap(), "portal-secret");
         assert_eq!(after.username, "DOP.MI1", "the portal id is untouched");
 
         // Idempotent: nothing left to do the second time.
-        assert!(!migrate_credential_with(&store, &new, &[]).unwrap());
+        assert!(!migrate_credential_with(&store, &owner, &new, &[]).unwrap());
     }
 
     #[test]
     fn leaves_a_credential_alone_when_no_legacy_key_opens_it() {
         let store = store::Store::open_in_memory().unwrap();
+        let owner = store.create_owner("9999999999", "h", "s").unwrap();
         let stranger = crypt::generate_key().unwrap();
         let new = crypt::derive_key("pw", &crypt::new_salt().unwrap()).unwrap();
         store
-            .set_credentials("DOP.MI1", &crypt::encrypt(&stranger, "x").unwrap())
+            .set_credentials(&owner, "DOP.MI1", &crypt::encrypt(&stranger, "x").unwrap())
             .unwrap();
 
         // A key that does not open it must not clobber it.
-        assert!(!migrate_credential_with(&store, &new, &[crypt::generate_key().unwrap()]).unwrap());
-        let stored = store.credentials().unwrap().unwrap();
+        assert!(
+            !migrate_credential_with(&store, &owner, &new, &[crypt::generate_key().unwrap()])
+                .unwrap()
+        );
+        let stored = store.credentials(&owner).unwrap().unwrap();
         assert_eq!(crypt::decrypt(&stranger, &stored.token).unwrap(), "x");
     }
 
@@ -1569,7 +1696,7 @@ mod tests {
     fn migrating_with_no_credential_is_a_no_op() {
         let store = store::Store::open_in_memory().unwrap();
         let key = crypt::generate_key().unwrap();
-        assert!(!migrate_credential_with(&store, &key, &[]).unwrap());
+        assert!(!migrate_credential_with(&store, "owner-1", &key, &[]).unwrap());
     }
 
     #[test]

@@ -13,15 +13,18 @@
  */
 import { create } from 'zustand';
 import type { Account, AccountList, AuthCredential, NewAccountInput } from './types';
+import type { OwnerInfo } from './bridge';
 import { SEED_ACCOUNTS } from './accounts';
 import { makeCredential, verifyCredential } from './auth';
 import { newId, nextListLabel } from './format';
 import {
   authStatus,
   changeLoginPassword,
+  deleteAccount as deleteAccountRemote,
   isDesktop,
   loginPassword,
   logoutDesktop,
+  saveAccount,
   setupLogin,
 } from './bridge';
 
@@ -41,6 +44,12 @@ export interface AppState {
 
   // ---- session (not persisted) ----
   loggedIn: boolean;
+  /** Workspaces known on this machine (desktop app). */
+  owners: OwnerInfo[];
+  /** The workspace this session is signed into. */
+  currentOwner: OwnerInfo | null;
+  /** The workspace shown on the login screen (remembered in localStorage). */
+  selectedOwner: OwnerInfo | null;
   /**
    * Whether a login password exists. In the desktop app the backend owns this,
    * because the same password derives the key protecting the DOP password.
@@ -78,8 +87,11 @@ export interface AppState {
   setLists: (lists: AccountList[], activeListId?: string) => void;
 
   // ---- auth actions (async: WebCrypto, or the backend in the desktop app) ----
-  setupPassword: (password: string) => Promise<void>;
-  login: (password: string) => Promise<boolean>;
+  setupPassword: (username: string, password: string) => Promise<void>;
+  /** Sign into `owner`; defaults to the remembered/selected workspace. */
+  login: (password: string, owner?: OwnerInfo) => Promise<boolean>;
+  /** Show a different workspace on the login screen. */
+  selectOwner: (owner: OwnerInfo) => void;
   logout: () => void;
   changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
   /** Ask the backend whether a password is set, and whether we are unlocked. */
@@ -87,7 +99,28 @@ export interface AppState {
 }
 
 const STORAGE_KEY = 'autodop-state-v1';
+const OWNER_KEY = 'autodop-last-owner';
 const PERSIST_VERSION = 1;
+
+/** The workspace shown on the login screen last time. */
+function rememberOwner(owner: OwnerInfo | null): void {
+  try {
+    if (owner) localStorage.setItem(OWNER_KEY, JSON.stringify({ id: owner.id, username: owner.username }));
+    else localStorage.removeItem(OWNER_KEY);
+  } catch { /* private mode */ }
+}
+
+function rememberedOwner(): OwnerInfo | null {
+  try {
+    const raw = localStorage.getItem(OWNER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.id === 'string' && typeof parsed?.username === 'string') {
+      return { id: parsed.id, username: parsed.username, has_credentials: false };
+    }
+  } catch { /* corrupt */ }
+  return null;
+}
 
 const DEFAULT_LISTS: AccountList[] = [{ id: 'main', name: 'A', accountIds: [] }];
 
@@ -202,6 +235,9 @@ export const useStore = create<AppState>()((set, get) => ({
   // storage, and the desktop app asks the backend.
   authConfigured: true,
   authReady: !isDesktop(),
+  owners: [],
+  currentOwner: null,
+  selectedOwner: rememberedOwner(),
 
   // ---- derived selectors ----
   accountByIdNow: (id) => get().accounts.find((a) => a._id === id),
@@ -318,11 +354,17 @@ export const useStore = create<AppState>()((set, get) => ({
       addedIn: '',
     };
     set({ accounts: [...get().accounts, account] });
+    if (isDesktop()) {
+      // The webview is not the database: persist through the backend, which
+      // upserts by number under the signed-in owner.
+      void saveAccount(account);
+    }
     return account;
   },
 
   deleteAccount: (id) => {
     if (!get().accounts.some((a) => a._id === id)) return false;
+    if (isDesktop()) void deleteAccountRemote(id);
     set({
       accounts: get().accounts.filter((a) => a._id !== id),
       lists: get().lists.map((l) =>
@@ -348,29 +390,59 @@ export const useStore = create<AppState>()((set, get) => ({
   // In the desktop app the backend verifies the password and derives the key
   // that protects the DOP password from it. The local hash stays as the browser
   // fallback (`npm run dev` without Tauri), where there is no backend to ask.
-  setupPassword: async (password) => {
+  setupPassword: async (username, password) => {
     if (isDesktop()) {
-      await setupLogin(password);
-      set({ authConfigured: true, loggedIn: true });
+      const res = await setupLogin(username.trim(), password);
+      if (!res.ok || !res.owner) throw new Error(res.error ?? 'Could not create the workspace.');
+      rememberOwner(res.owner);
+      set({
+        authConfigured: true,
+        loggedIn: true,
+        currentOwner: res.owner,
+        selectedOwner: res.owner,
+        owners: [...get().owners, res.owner],
+      });
       return;
     }
     set({ auth: await makeCredential(password), loggedIn: true, authConfigured: true });
   },
 
-  login: async (password) => {
+  login: async (password, owner) => {
     if (isDesktop()) {
-      const ok = await loginPassword(password);
-      set({ loggedIn: ok });
-      return ok;
+      const target = owner ?? get().selectedOwner ?? get().owners[0] ?? null;
+      if (!target) return false;
+      const res = await loginPassword(target.id, password);
+      if (res.owner) {
+        rememberOwner(res.owner);
+        set({
+          loggedIn: true,
+          currentOwner: res.owner,
+          selectedOwner: res.owner,
+          owners: get().owners.some((o) => o.id === res.owner!.id)
+            ? get().owners
+            : [...get().owners, res.owner],
+        });
+      } else if (res.error) {
+        set({ owners: [], selectedOwner: null, loggedIn: false });
+        throw new Error(res.error);
+      } else {
+        set({ loggedIn: false });
+      }
+      return res.ok;
     }
     if (!(await verifyCredential(get().auth, password))) return false;
     set({ loggedIn: true });
     return true;
   },
 
+  selectOwner: (owner) => {
+    rememberOwner(owner);
+    set({ selectedOwner: owner });
+  },
+
   logout: () => {
     if (isDesktop()) void logoutDesktop();
-    set({ loggedIn: false });
+    set({ loggedIn: false, currentOwner: null });
   },
 
   changePassword: async (oldPassword, newPassword) => {
@@ -390,10 +462,18 @@ export const useStore = create<AppState>()((set, get) => ({
       return;
     }
     const status = await authStatus();
+    const owners = status?.owners ?? [];
+    const current = owners.find((o) => o.id === status?.current) ?? null;
+    // Prefer the workspace of the live session; otherwise the remembered one.
+    const selected = current ?? rememberedOwner() ?? owners[0] ?? null;
+    if (selected) rememberOwner(selected);
     set({
       authConfigured: status?.configured ?? false,
       // The derived key lives only for a session, so a reload starts locked.
       loggedIn: status?.unlocked ?? false,
+      owners,
+      currentOwner: current,
+      selectedOwner: selected,
       authReady: true,
     });
   },

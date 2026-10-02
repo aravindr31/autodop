@@ -156,6 +156,7 @@ const PASSWORD_MISMATCH: &str =
 /// the caller so this stays testable; `None` when no password is stored.
 pub fn portable_backup(
     store: &Store,
+    owner_id: &str,
     credentials: Option<PortableCredentials>,
     created_at: &str,
 ) -> Result<PortableBackup, String> {
@@ -163,8 +164,8 @@ pub fn portable_backup(
         format: PORTABLE_FORMAT.into(),
         version: PORTABLE_VERSION,
         created_at: created_at.to_string(),
-        accounts: store.accounts()?,
-        lists: store.lists()?,
+        accounts: store.accounts(owner_id)?,
+        lists: store.lists(owner_id)?,
         credentials,
     })
 }
@@ -172,11 +173,12 @@ pub fn portable_backup(
 /// Write the JSON file.
 pub fn portable_export(
     store: &Store,
+    owner_id: &str,
     destination: &Path,
     created_at: &str,
     credentials: Option<PortableCredentials>,
 ) -> Result<PortableBackup, String> {
-    let backup = portable_backup(store, credentials, created_at)?;
+    let backup = portable_backup(store, owner_id, credentials, created_at)?;
     let text = serde_json::to_string_pretty(&backup).map_err(|error| error.to_string())?;
     std::fs::write(destination, text)
         .map_err(|error| format!("cannot write {}: {error}", destination.display()))?;
@@ -228,8 +230,12 @@ pub fn portable_parse(source: &Path) -> Result<PortableBackup, String> {
 /// List entries pointing at accounts that are not in the file are dropped,
 /// the same way `save_lists` handles stale references. The DOP password is
 /// imported separately by [`portable_import_credentials`].
-pub fn portable_import(store: &Store, backup: &PortableBackup) -> Result<(i64, i64, i64), String> {
-    store.replace_accounts(&backup.accounts)?;
+pub fn portable_import(
+    store: &Store,
+    owner_id: &str,
+    backup: &PortableBackup,
+) -> Result<(i64, i64, i64), String> {
+    store.replace_accounts(owner_id, &backup.accounts)?;
     let input: Vec<crate::db::InputList> = backup
         .lists
         .iter()
@@ -247,9 +253,9 @@ pub fn portable_import(store: &Store, backup: &PortableBackup) -> Result<(i64, i
                 .collect(),
         })
         .collect();
-    store.save_lists(&input)?;
+    store.save_lists(owner_id, &input)?;
 
-    let counts = store.counts()?;
+    let counts = store.counts(owner_id)?;
     Ok((counts.accounts, counts.lists, counts.entries))
 }
 
@@ -259,6 +265,7 @@ pub fn portable_import(store: &Store, backup: &PortableBackup) -> Result<(i64, i
 /// backup; it has already been verified by [`portable_read`].
 pub fn portable_import_credentials(
     store: &Store,
+    owner_id: &str,
     backup: &PortableBackup,
     login_password: &str,
     key: &str,
@@ -270,7 +277,7 @@ pub fn portable_import_credentials(
     let password = crate::crypt::decrypt(&derived, &credentials.token)
         .map_err(|_| PASSWORD_MISMATCH.to_string())?;
     let token = crate::crypt::encrypt(key, &password)?;
-    store.set_credentials(&credentials.username, &token)
+    store.set_credentials(owner_id, &credentials.username, &token)
 }
 
 #[cfg(test)]
@@ -288,14 +295,18 @@ mod tests {
 
     fn seeded(path: &Path) {
         let store = Store::open(path).expect("store opens");
+        let owner = store.create_owner("9999999999", "h", "s").expect("owner");
         store
-            .replace_accounts(&[
-                serde_json::json!({"Number": "111", "Name": "One", "Denomination": 100}),
-                serde_json::json!({"Number": "222", "Name": "Two", "Denomination": "100"}),
-            ])
+            .replace_accounts(
+                &owner,
+                &[
+                    serde_json::json!({"Number": "111", "Name": "One", "Denomination": 100}),
+                    serde_json::json!({"Number": "222", "Name": "Two", "Denomination": "100"}),
+                ],
+            )
             .expect("accounts saved");
         store
-            .set_credentials("DOP.MI.TEST", "fernet-token")
+            .set_credentials(&owner, "DOP.MI.TEST", "fernet-token")
             .expect("credential saved");
     }
 
@@ -316,8 +327,12 @@ mod tests {
         );
         // Reading the copy back through the store confirms it really opens.
         let store = Store::open(&dst).expect("backup opens as a store");
-        assert_eq!(store.counts().expect("counts").accounts, 2);
-        assert!(store.credentials().expect("creds").is_some());
+        assert_eq!(store.counts_all().expect("counts").accounts, 2);
+        assert!(store
+            .owners()
+            .expect("owners")
+            .iter()
+            .any(|o| o.has_credential));
         let _ = std::fs::remove_file(&src);
         let _ = std::fs::remove_file(&dst);
     }
@@ -357,53 +372,67 @@ mod tests {
         let _ = std::fs::remove_file(&dst);
     }
 
-    fn portable_seed(path: &Path, login_password: &str) -> Store {
+    fn portable_seed(path: &Path, login_password: &str) -> (Store, String) {
         let store = Store::open(path).expect("store opens");
+        let owner = store
+            .create_owner("9999999999", "unused", "unused")
+            .expect("owner");
         store
-            .replace_accounts(&[
-                serde_json::json!({"_id": "acc-1", "Number": "111", "Name": "One", "Denomination": 100}),
-                serde_json::json!({"_id": "acc-2", "Number": "222", "Name": "Two", "Denomination": "100"}),
-            ])
+            .replace_accounts(
+                &owner,
+                &[
+                    serde_json::json!({"_id": "acc-1", "Number": "111", "Name": "One", "Denomination": 100}),
+                    serde_json::json!({"_id": "acc-2", "Number": "222", "Name": "Two", "Denomination": "100"}),
+                ],
+            )
             .expect("accounts saved");
         store
-            .save_lists(&[crate::db::InputList {
-                id: String::new(),
-                name: "A".into(),
-                active: true,
-                entries: vec![
-                    crate::db::InputEntry {
-                        id: "acc-1".into(),
-                        rebate: 4,
-                    },
-                    crate::db::InputEntry {
-                        id: "acc-2".into(),
-                        rebate: 0,
-                    },
-                ],
-            }])
+            .save_lists(
+                &owner,
+                &[crate::db::InputList {
+                    id: String::new(),
+                    name: "A".into(),
+                    active: true,
+                    entries: vec![
+                        crate::db::InputEntry {
+                            id: "acc-1".into(),
+                            rebate: 4,
+                        },
+                        crate::db::InputEntry {
+                            id: "acc-2".into(),
+                            rebate: 0,
+                        },
+                    ],
+                }],
+            )
             .expect("list saved");
-        // Set up the login the way `setup_login` does, and store the DOP
-        // password encrypted under that login's derived key.
+        // The owner's login material, the way `setup_login` writes it, and the
+        // DOP password encrypted under that login's derived key.
         let salt = crate::crypt::new_salt().expect("salt");
         let hash = crate::crypt::hash_login(login_password).expect("hash");
-        store.set_meta("kdf_salt", &salt).expect("salt stored");
-        store.set_meta("login_hash", &hash).expect("hash stored");
+        store
+            .set_owner_auth(&owner, &hash, &salt)
+            .expect("auth set");
         let key = crate::crypt::derive_key(login_password, &salt).expect("key");
         let token = crate::crypt::encrypt(&key, "the-portal-password").expect("token");
         store
-            .set_credentials("DOP.MI.TEST", &token)
+            .set_credentials(&owner, "DOP.MI.TEST", &token)
             .expect("credential saved");
-        store
+        (store, owner)
     }
 
-    /// What the real export command assembles from the store's meta table.
-    fn portable_creds(store: &Store) -> PortableCredentials {
-        let stored = store.credentials().expect("creds").expect("credential");
+    /// What the real export command assembles from the owner's row.
+    fn portable_creds(store: &Store, owner: &str) -> PortableCredentials {
+        let stored = store
+            .credentials(owner)
+            .expect("creds")
+            .expect("credential");
+        let auth = store.owner_auth(owner).expect("auth").expect("auth");
         PortableCredentials {
             username: stored.username,
             token: stored.token,
-            salt: store.meta("kdf_salt").expect("salt"),
-            login_hash: store.meta("login_hash").expect("hash"),
+            salt: auth.kdf_salt,
+            login_hash: auth.login_hash,
         }
     }
 
@@ -413,9 +442,9 @@ mod tests {
         let dst = temp_file("portable-dst.db");
         let json = temp_file("portable.json");
         let login_password = "login-pass-1";
-        let store = portable_seed(&src, login_password);
-        let credentials = Some(portable_creds(&store));
-        let backup = portable_export(&store, &json, "2026-10-02T00:00:00Z", credentials)
+        let (store, owner) = portable_seed(&src, login_password);
+        let credentials = Some(portable_creds(&store, &owner));
+        let backup = portable_export(&store, &owner, &json, "2026-10-02T00:00:00Z", credentials)
             .expect("export succeeds");
         drop(store);
         assert_eq!(backup.accounts.len(), 2);
@@ -429,16 +458,22 @@ mod tests {
 
         // A fresh store, a different machine, a different login password.
         let fresh = Store::open(&dst).expect("fresh store");
+        let new_owner = fresh
+            .create_owner("8888888888", "unused", "unused")
+            .expect("owner");
         let read = portable_read(&json, login_password).expect("read succeeds");
-        portable_import(&fresh, &read).expect("import succeeds");
+        portable_import(&fresh, &new_owner, &read).expect("import succeeds");
         // The new machine's login-derived key is a real Fernet key.
         let new_key = crate::crypt::generate_key().expect("key");
-        portable_import_credentials(&fresh, &read, login_password, &new_key)
+        portable_import_credentials(&fresh, &new_owner, &read, login_password, &new_key)
             .expect("credentials import");
 
-        let counts = fresh.counts().expect("counts");
+        let counts = fresh.counts(&new_owner).expect("counts");
         assert_eq!((counts.accounts, counts.lists, counts.entries), (2, 1, 2));
-        let stored = fresh.credentials().expect("creds").expect("credential");
+        let stored = fresh
+            .credentials(&new_owner)
+            .expect("creds")
+            .expect("credential");
         assert_eq!(stored.username, "DOP.MI.TEST");
         // Re-encrypted under the *new* login key, readable with it.
         assert_eq!(
@@ -463,9 +498,9 @@ mod tests {
     fn portable_export_carries_nothing_when_no_password_is_stored() {
         let src = temp_file("portable-nopass-src.db");
         let json = temp_file("portable-nopass.json");
-        let store = portable_seed(&src, "login-pass-1");
-        store.delete_account("acc-1").expect("deleted");
-        let backup = portable_export(&store, &json, "t", None).expect("export succeeds");
+        let (store, owner) = portable_seed(&src, "login-pass-1");
+        store.delete_account(&owner, "acc-1").expect("deleted");
+        let backup = portable_export(&store, &owner, &json, "t", None).expect("export succeeds");
         assert!(backup.credentials.is_none());
         let _ = std::fs::remove_file(&src);
         let _ = std::fs::remove_file(&json);

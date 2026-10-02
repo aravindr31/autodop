@@ -225,8 +225,8 @@ function DesktopSection(): React.ReactElement {
       {ready ? (
         <>
           <p className="mb-2 text-xs leading-relaxed text-slate-500">
-            The password <code className="font-mono">scraper.py</code> signs into the DOP portal
-            with. India Post expires it every 180 days — change it on the portal first, then save it
+            The password is used by the app to sign into the DOP portal.
+            India Post expires it every 180 days — change it on the portal first, then save it
             here.
           </p>
           <p className="mb-2 flex items-center gap-1.5 text-xs text-slate-500">
@@ -244,10 +244,10 @@ function DesktopSection(): React.ReactElement {
               <KeyRound className="h-4 w-4" />Save DOP password
             </Button>
           </div>
-          <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+          {/* <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
             Stored encrypted with <code className="font-mono">FERNET_KEY</code> in this app&rsquo;s own
             database on this machine, readable only by your user. Nothing is sent anywhere.
-          </p>
+          </p> */}
           {outcome ? (
             <p className="mt-2 text-[11px] leading-relaxed text-emerald-700">
               Stored encrypted — saved in{' '}
@@ -263,8 +263,7 @@ function DesktopSection(): React.ReactElement {
             <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
               {info.scraper_kind === 'sidecar' ? (
                 <>
-                  Runner: <code className="font-mono">built into the app</code> — it carries its own
-                  Python and selenium, so no interpreter is needed here.
+                  Runner: <code className="font-mono">Built In</code> 
                 </>
               ) : (
                 <>
@@ -396,10 +395,10 @@ function ScraperSection(): React.ReactElement {
     <Section title="Scraper script">
       {ready ? (
         <>
-          <p className="mb-2 text-xs leading-relaxed text-slate-500">
+          {/* <p className="mb-2 text-xs leading-relaxed text-slate-500">
             The runner that drives the DOP portal. Builds carry a self-contained copy, so there is
             normally nothing to set here.
-          </p>
+          </p> */}
           {location ? (
             <div className="mb-2 flex flex-col gap-1 rounded-lg bg-slate-50 px-2.5 py-2">
               <Pill tone={location.present ? 'positive' : 'neutral'}>
@@ -563,12 +562,12 @@ function BackupSection(): React.ReactElement {
     <Section title="Backup & restore">
       {ready ? (
         <>
-          <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+          {/* <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
             One SQLite file holds everything on this machine. The backup carries
             the DOP password encrypted with your login password —
             <strong> it only opens together with that password</strong>. On another
             machine, sign in with the same password first.
-          </p>
+          </p> */}
           <input
             aria-label="Backup destination path"
             value={exportPath}
@@ -614,18 +613,19 @@ function BackupSection(): React.ReactElement {
                 <Upload className="h-4 w-4" />Restore from backup
               </Button>
             )}
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            {/* <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
               A restore keeps the replaced database as
               <code className="font-mono"> autodop.db.pre-restore-…</code> next to the live
               file, and signs you out — sign back in with the password the backup expects.
-            </p>
+            </p> */}
           </div>
           <div className="mt-3 border-t border-slate-100 pt-2">
             <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
-              <strong>Portable JSON</strong> — the same data in a human-readable file that
+              <strong>Export Data as Portable JSON</strong> 
+              {/* — the same data in a human-readable file that
               moves to any machine. The DOP password stays encrypted with
               <strong> this app&rsquo;s login password</strong>: to import on a new machine,
-              set your login there to the same password, sign in, and import with it.
+              set your login there to the same password, sign in, and import with it. */}
             </p>
             <input
               aria-label="JSON backup destination path"

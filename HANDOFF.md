@@ -141,6 +141,24 @@ tests) and the roundtrip probe:
 A real export of the live database exists at `~/Backups/autodop-backup-2026-10-02.db`
 (148 accounts, 26 lists, credential).
 
+## Portable JSON backup (done)
+
+The same section also does a **portable JSON export/import** (`portable_export` /
+`portable_read` / `portable_import` in `backup.rs`, commands
+`export_portable_backup` / `import_portable_backup`). The file is
+human-readable JSON: accounts and lists in plain JSON, the DOP password as the
+exact Fernet token the store holds, plus the `kdf_salt` and the `login_hash`
+that open it. The **app login password is the key**: import on another machine
+means set the login there to the same password, sign in, then import with that
+password — it is verified against the carried `login_hash`, the token is
+decrypted, and the DOP password is re-encrypted under the new machine's login
+key. Export needs no password at all (the token travels as stored). Import
+replaces accounts/lists/credential wholesale and keeps a
+`pre-restore-<stamp>` SQLite safety copy of what was replaced. Probe:
+`cargo run --example backup_probe -- json ~/Backups/autodop-export.json`. A
+real export exists at `~/Backups/autodop-export-2026-10-02.json` (148 accounts,
+26 lists, credential).
+
 ## Facts worth knowing
 
 - `scraper.py:283` exits on missing args **before** touching the portal, so the

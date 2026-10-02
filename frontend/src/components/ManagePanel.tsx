@@ -21,6 +21,8 @@ import {
   clearScraperPath,
   exportBackup,
   importBackup,
+  exportPortableBackup,
+  importPortableBackup,
 } from '../lib/bridge';
 import type { LocalStatus, DopCredentialStatus, SavedCredentials, ScraperLocation } from '../lib/bridge';
 import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database, Save, Upload } from 'lucide-react';
@@ -457,6 +459,11 @@ function BackupSection(): React.ReactElement {
   const [importPath, setImportPath] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
+  // Portable JSON
+  const [jsonPath, setJsonPath] = useState('');
+  const [jsonImportPath, setJsonImportPath] = useState('');
+  const [jsonPassword, setJsonPassword] = useState('');
+  const [confirmingJson, setConfirmingJson] = useState(false);
 
   const runExport = async () => {
     if (!exportPath.trim()) {
@@ -490,6 +497,55 @@ function BackupSection(): React.ReactElement {
     setImportPath('');
     notify(
       `Restored ${res.outcome.accounts} accounts, ${res.outcome.lists} list(s)` +
+        (res.outcome.has_credentials ? ' and the DOP password' : ''),
+      'success',
+    );
+    if (res.outcome.previous) {
+      notify(`The replaced database was kept at ${res.outcome.previous}`, 'info');
+    }
+    const accounts = await loadAccountsFromDb();
+    if (accounts.ok && accounts.accounts) useStore.getState().setAccounts(accounts.accounts);
+    const lists = await loadLists();
+    if (lists.ok && lists.lists) useStore.getState().setLists(lists.lists, lists.activeId);
+  };
+
+  const runJsonExport = async () => {
+    if (!jsonPath.trim()) {
+      notify('Enter a full path for the JSON backup file', 'error');
+      return;
+    }
+    setBusy(true);
+    const res = await exportPortableBackup(jsonPath.trim());
+    setBusy(false);
+    if (!res.ok || !res.outcome) {
+      notify(res.error ?? 'Export failed', 'error');
+      return;
+    }
+    notify(
+      `Exported ${res.outcome.accounts} accounts, ${res.outcome.lists} list(s)` +
+        (res.outcome.has_credentials ? ' and the DOP password' : '') +
+        ` to ${res.outcome.previous}`,
+      'success',
+    );
+  };
+
+  const runJsonImport = async () => {
+    if (!jsonImportPath.trim() || !jsonPassword) {
+      notify('The file path and the login password it was made with are both required', 'error');
+      return;
+    }
+    setBusy(true);
+    const res = await importPortableBackup(jsonImportPath.trim(), jsonPassword);
+    setBusy(false);
+    setConfirmingJson(false);
+    if (!res.ok || !res.outcome) {
+      notify(res.error ?? 'Import failed', 'error');
+      return;
+    }
+    setJsonImportPath('');
+    setJsonPassword('');
+    notify(
+      `Imported ${res.outcome.accounts} accounts, ${res.outcome.lists} list(s)` +
         (res.outcome.has_credentials ? ' and the DOP password' : ''),
       'success',
     );
@@ -562,6 +618,66 @@ function BackupSection(): React.ReactElement {
               <code className="font-mono"> autodop.db.pre-restore-…</code> next to the live
               file, and signs you out — sign back in with the password the backup expects.
             </p>
+          </div>
+          <div className="mt-3 border-t border-slate-100 pt-2">
+            <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
+              <strong>Portable JSON</strong> — the same data in a human-readable file that
+              moves to any machine. The DOP password stays encrypted with
+              <strong> this app&rsquo;s login password</strong>: to import on a new machine,
+              set your login there to the same password, sign in, and import with it.
+            </p>
+            <input
+              aria-label="JSON backup destination path"
+              value={jsonPath}
+              onChange={(e) => setJsonPath(e.currentTarget.value)}
+              className={FIELD}
+              placeholder="~/Backups/autodop-export.json"
+            />
+            <Button
+              variant="secondary"
+              className="!mt-2 !w-full"
+              disabled={busy}
+              onClick={() => void runJsonExport()}
+            >
+              <Save className="h-4 w-4" />Export JSON
+            </Button>
+            <input
+              aria-label="JSON backup path to import"
+              value={jsonImportPath}
+              onChange={(e) => { setJsonImportPath(e.currentTarget.value); setConfirmingJson(false); }}
+              className={FIELD + ' !mt-2'}
+              placeholder="Path to an autodop-export.json"
+            />
+            <input
+              type="password"
+              aria-label="Login password the JSON backup was made with"
+              value={jsonPassword}
+              onChange={(e) => { setJsonPassword(e.currentTarget.value); setConfirmingJson(false); }}
+              className={FIELD + ' !mt-2'}
+              placeholder="Login password the export was made with"
+            />
+            {confirmingJson ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-rose-700">
+                  Replace the live accounts, lists and DOP password with this file?
+                </span>
+                <Button variant="danger" size="sm" disabled={busy} onClick={() => void runJsonImport()}>
+                  Yes, import
+                </Button>
+                <Button variant="secondary" size="sm" onClick={() => setConfirmingJson(false)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <Button
+                variant="secondary"
+                className="!mt-2 !w-full"
+                disabled={busy || !jsonImportPath.trim() || !jsonPassword}
+                onClick={() => setConfirmingJson(true)}
+              >
+                <Upload className="h-4 w-4" />Import JSON
+              </Button>
+            )}
           </div>
         </>
       ) : (

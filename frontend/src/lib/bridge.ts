@@ -303,6 +303,47 @@ export async function importBackup(
   }
 }
 
+/**
+ * Write a portable JSON backup (accounts + lists as plain JSON, the DOP
+ * password as the token encrypted with the current app login password) to
+ * `path`. Importable on any machine.
+ */
+export async function exportPortableBackup(
+  path: string,
+): Promise<{ ok: boolean; error?: string; outcome?: BackupOutcome }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return { ok: true, outcome: await invoke<BackupOutcome>('export_portable_backup', { path }) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Replace the local database with the portable JSON backup at `path`.
+ *
+ * `loginPassword` is the app login password the backup was made with — it
+ * opens the carried DOP password, which is then re-encrypted under this
+ * machine's login.
+ */
+export async function importPortableBackup(
+  path: string,
+  loginPassword: string,
+): Promise<{ ok: boolean; error?: string; outcome?: BackupOutcome }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return {
+      ok: true,
+      outcome: await invoke<BackupOutcome>('import_portable_backup', {
+        path,
+        loginPassword,
+      }),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Load every account from the local database. */
 export async function loadAccountsFromDb(): Promise<{
   ok: boolean;

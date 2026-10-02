@@ -303,7 +303,7 @@ fn python_bin() -> String {
 // --------------------------------------------------------------------------- //
 
 /// Seconds since the Unix epoch.
-fn now_secs() -> u64 {
+pub fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -314,7 +314,7 @@ fn now_secs() -> u64 {
 ///
 /// Hand-rolled so the app does not carry a date library for one string; the
 /// civil-date step is Howard Hinnant's `civil_from_days`.
-fn rfc3339_utc(secs: u64) -> String {
+pub fn rfc3339_utc(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let (hour, minute, second) = (rem / 3600, (rem % 3600) / 60, rem % 60);
@@ -1296,6 +1296,85 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     })
 }
 
+/// Write a portable JSON backup of the live database to `path`.
+///
+/// A human-readable JSON file — accounts and lists as plain JSON, the DOP
+/// password as the same Fernet token the store holds, with the login hash and
+/// salt needed to open it. Import on another machine asks for the app login
+/// password this was made with.
+#[tauri::command]
+fn export_portable_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> {
+    let destination = expand_home(&path);
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    let store = open_store(&app)?;
+    let credentials = match store.credentials()? {
+        Some(stored) if !stored.token.trim().is_empty() => {
+            let salt = store
+                .meta(META_KDF_SALT)
+                .ok_or("no KDF salt in the database — save the DOP password again")?;
+            let login_hash = store
+                .meta(META_LOGIN_HASH)
+                .ok_or("no login hash in the database — save the DOP password again")?;
+            Some(backup::PortableCredentials {
+                username: stored.username,
+                token: stored.token,
+                salt,
+                login_hash,
+            })
+        }
+        _ => None,
+    };
+    let written =
+        backup::portable_export(&store, &destination, &rfc3339_utc(now_secs()), credentials)?;
+    Ok(BackupOutcome {
+        accounts: written.accounts.len() as i64,
+        lists: written.lists.len() as i64,
+        entries: written.lists.iter().map(|l| l.entries.len() as i64).sum(),
+        has_credentials: written.credentials.is_some(),
+        previous: Some(destination.display().to_string()),
+    })
+}
+
+/// Replace the live database with the portable JSON backup at `path`.
+///
+/// `login_password` is the app login password of the machine that made the
+/// backup — it is verified against the hash carried in the file, and the DOP
+/// password it opens is re-encrypted under this machine's login. Signing in
+/// first is required for that; the file's accounts and lists need nothing.
+#[tauri::command]
+fn import_portable_backup(
+    app: AppHandle,
+    path: String,
+    login_password: String,
+) -> Result<BackupOutcome, String> {
+    let source = expand_home(&path);
+    let backup = backup::portable_read(&source, &login_password)?;
+
+    let live = store_path(&app)?;
+    let safety = live.with_extension(format!("db.pre-restore-{}", compact_timestamp(now_secs())));
+    backup::export(&live, &safety)?;
+
+    let store = open_store(&app)?;
+    let (accounts, lists, entries) = backup::portable_import(&store, &backup)?;
+    let mut has_credentials = false;
+    if backup.credentials.is_some() {
+        let key = unlocked_key(&app)
+            .ok_or("Sign in first — the DOP password is re-encrypted with your login's key.")?;
+        backup::portable_import_credentials(&store, &backup, &login_password, &key)?;
+        has_credentials = true;
+    }
+    Ok(BackupOutcome {
+        accounts,
+        lists,
+        entries,
+        has_credentials,
+        previous: Some(safety.display().to_string()),
+    })
+}
+
 /// Which DOP credentials the app would use, and where they come from.
 ///
 /// Never returns the password — only the portal id and the source.
@@ -1343,6 +1422,8 @@ pub fn run() {
             save_lists,
             export_backup,
             import_backup,
+            export_portable_backup,
+            import_portable_backup,
             scraper_location,
             set_scraper_path,
             clear_scraper_path

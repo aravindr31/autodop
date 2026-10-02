@@ -40,9 +40,41 @@ fn main() {
                 }
             }
         }
+        Some(command) if command == "json" => {
+            let destination = PathBuf::from(std::env::args().nth(2).expect("a destination path"));
+            let source = live_store_path();
+            println!("source: {}", source.display());
+            let store = Store::open(&source).expect("live store opens");
+            // The portable export needs no password: the DOP token, the salt
+            // and the login hash travel as the store already holds them.
+            let credentials = store.credentials().expect("creds").and_then(|stored| {
+                Some(autodop_lib::backup::PortableCredentials {
+                    username: stored.username,
+                    token: stored.token,
+                    salt: store.meta("kdf_salt")?,
+                    login_hash: store.meta("login_hash")?,
+                })
+            });
+            let written = backup::portable_export(
+                &store,
+                &destination,
+                &autodop_lib::rfc3339_utc(autodop_lib::now_secs()),
+                credentials,
+            )
+            .expect("portable export succeeds");
+            let parsed = backup::portable_parse(&destination).expect("parses back");
+            assert_eq!(parsed.accounts.len() as i64, store.counts().expect("counts").accounts);
+            println!(
+                "exported: {} accounts, {} list(s), credentials: {} -> {}",
+                written.accounts.len(),
+                written.lists.len(),
+                written.credentials.is_some(),
+                destination.display()
+            );
+        }
         Some(other) => {
             eprintln!(
-                "unknown command: {other} (use export, inspect, or nothing for the roundtrip)"
+                "unknown command: {other} (use export, inspect, json, or nothing for the roundtrip)"
             );
             std::process::exit(2);
         }

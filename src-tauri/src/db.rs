@@ -109,13 +109,13 @@ pub fn fernet_key(app: Option<&AppHandle>) -> Option<String> {
 // lists                                                                       //
 // --------------------------------------------------------------------------- //
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DbListEntry {
     pub id: String,
     pub rebate: i64,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DbList {
     pub id: String,
     pub name: String,

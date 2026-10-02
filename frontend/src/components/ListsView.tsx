@@ -414,7 +414,7 @@ export default function ListsView(): React.ReactElement {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5">
+      {/* <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Backend</span>
         <div className="relative min-w-0 flex-1">
           <input
@@ -425,7 +425,7 @@ export default function ListsView(): React.ReactElement {
           />
         </div>
         <Button variant="secondary" size="sm" onClick={saveEndpoint}>Save</Button>
-      </div>
+      </div> */}
 
       { }
       {populated.length > 0 ? <GenerateAllButton lists={populated} /> : null}

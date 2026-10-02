@@ -11,7 +11,7 @@ portal** through Selenium: it keeps account holders, groups them into lists
 - Repo: `/Users/aravind/repos/AutoDOP`, branch `feat/astro-frontend-spec`
 - Stack: Astro + React + Tailwind frontend, **Tauri v2** desktop shell, **Rust**
   backend, one **SQLite** file per install
-- Current version: **0.4.0** · latest commit `9861e70`
+- Current version: **0.4.0** · latest commit `d34651d`
 - `main.py`, `scraper.py` are the original app and are **left untouched**
 
 ## Where things stand
@@ -51,15 +51,18 @@ rebate data — only the account master and the password.
 
 ## How it works now
 
-**Storage.** SQLite, one file per machine, nothing shared. Atlas is read in only
-two places: the one-time import, and a credential fallback that exists until a
-local password is saved. **Nothing is ever written to Atlas.**
+**Storage.** SQLite, one file per machine, nothing shared. **Atlas is gone
+entirely** — `mongodb` and `futures-util` are out of `Cargo.toml`, `db.rs` is
+now just the `.env` reader plus the shared list/credential types, and the
+import machinery (`import_from_atlas`, `read_atlas`, `write_import`, the four
+Atlas probes) is deleted. Credential resolution: env → local database → legacy
+`credentials.json`.
 
 **Credentials.** The DOP password is encrypted with a key derived from the login
 password via **Argon2id** over a stored salt. The key is never written to disk —
 it lives in memory only while signed in. Deliberately *not* a bare SHA-256: that
 is fast, and the threat model is someone holding the database file. Resolution
-order: env → local database → legacy `credentials.json` → Atlas.
+order: env → local database → legacy `credentials.json`.
 
 **Login.** Verified in Rust (Argon2id PHC string in `meta`). The webview no
 longer stores any password hash. Changing the password **re-encrypts** the stored
@@ -106,14 +109,13 @@ Not proven:
 
 ## Open work
 
-1. **Remove Atlas entirely** — `db.rs` and the `mongodb` dependency are still
-   present purely for the import (~100 MB of build deps). Two read call sites in
-   `lib.rs`; the rest is deletion. Do this only once the data is confirmed local
-   (it is, on this machine).
-2. **Local multi-account** — mentioned as a possibility, not started. Would need
+1. **Local multi-account** — mentioned as a possibility, not started. Would need
    an owner column on `accounts` and `lists`. Cheaper now, while lists are empty.
-3. **Backup/restore via a real file dialog** — implemented with typed paths; a
+2. **Backup/restore via a real file dialog** — implemented with typed paths; a
    native picker would need `tauri-plugin-dialog`.
+3. **Verify the upgrade on the shipped app** — the 0.4.0 DMG built from
+   `d34651d` (no-Atlas) replaced the one from `e2202a3`; the login/credential
+   path changed only by losing a fallback, and tests cover the rest.
 
 ## Backup / restore (done)
 
@@ -151,5 +153,6 @@ A real export of the live database exists at `~/Backups/autodop-backup-2026-10-0
   `estimated_document_count` vs an exact count.
 - Unsigned builds: macOS Gatekeeper needs right-click → Open. The macOS bundle is
   arm64-only.
-- Probes, all read-only and value-free: `db_schema`, `db_probe`, `import_probe`,
-  `fernet_probe`, `build_info`.
+- Probes: `backup_probe` (backup/inspect/roundtrip) and `build_info`. The
+  Atlas-only probes (`db_schema`, `db_probe`, `import_probe`, `fernet_probe`)
+  were removed with Atlas.

@@ -1,17 +1,19 @@
 /** Formatting + misc helpers for the AutoDOP UI. */
 
-/** "2000" -> 2,000 (Indian digit grouping). */
+/** "2,000" / "2000.00" -> 2,000 (Indian digit grouping, decimals dropped). */
 export function formatINR(value: string | number): string {
-  const n = typeof value === 'string' ? Number(value.replace(/[^\d]/g, '')) : value;
+  // Strip everything but digits and the decimal point; a stray "10000.00"
+  // must not become 1000000 by swallowing the dot.
+  const n = Number(typeof value === 'string' ? value.replace(/[^\d.]/g, '') : value);
   if (Number.isNaN(n)) return String(value);
-  return n.toLocaleString('en-IN');
+  return Math.round(n).toLocaleString('en-IN');
 }
 
 /** "2,000" parlance used on cards. */
 export function denominationLabel(value: string): string {
-  const n = Number(value.replace(/[^\d]/g, ''));
+  const n = Number(value.replace(/[^\d.]/g, ''));
   if (Number.isNaN(n) || n === 0) return value;
-  return `₹ ${n.toLocaleString('en-IN')}`;
+  return `₹ ${Math.round(n).toLocaleString('en-IN')}`;
 }
 
 /** Random, collision-resistant id for client-created lists. */

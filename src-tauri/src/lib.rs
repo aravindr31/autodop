@@ -1392,9 +1392,12 @@ pub fn parse_deposit_row(line: &str) -> Result<Option<(String, String, String)>,
     if name.is_empty() {
         return Err("no holder name on the line");
     }
-    // `1,500.00` -> `1500.00`; the store keeps denominations as strings and
-    // the legacy data held them without commas.
-    let denomination: String = tokens[amount_at].replace(',', "");
+    // `1,500.00` -> `1500`: the legacy data held whole rupees without commas,
+    // and the display layer does not expect a decimal point.
+    let mut denomination: String = tokens[amount_at].replace(',', "");
+    if let Some((whole, _)) = denomination.split_once('.') {
+        denomination = whole.to_string();
+    }
     Ok(Some((number, name, denomination)))
 }
 
@@ -1865,7 +1868,7 @@ mod tests {
                 .expect("a row");
         assert_eq!(number, "020001994152");
         assert_eq!(name, "REMYA C V");
-        assert_eq!(denomination, "1500.00");
+        assert_eq!(denomination, "1500");
     }
 
     #[test]

@@ -287,7 +287,7 @@ export const useStore = create<AppState>()((set, get) => ({
     for (const id of list.accountIds) {
       const acc = get().accounts.find((a) => a._id === id);
       if (!acc) continue;
-      const n = Number(acc.Denomination.replace(/[^\d]/g, ''));
+      const n = Number(acc.Denomination.replace(/[^\d.]/g, ''));
       if (!Number.isNaN(n)) amount += n;
       count += 1;
     }

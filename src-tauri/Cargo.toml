@@ -1,6 +1,6 @@
 [package]
 name = "autodop"
-version = "0.6.1"
+version = "0.7.0"
 description = "AutoDOP desktop app — account lists + DOP scraper runner"
 authors = ["Aravind"]
 edition = "2021"

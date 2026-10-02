@@ -10,6 +10,23 @@ on:
   pull_request:
 
 jobs:
+  # PRs must come from a feature/fix/hotfix branch — never straight from
+  # main. Conventional commit types map to releases (see README).
+  pr-source:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the source branch
+        shell: bash
+        run: |
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          case "$HEAD_BRANCH" in
+            main|master|develop|release*)
+              echo "::error::PRs must come from a feature/fix/hotfix branch — '$HEAD_BRANCH' cannot be merged to main."
+              exit 1 ;;
+          esac
+          echo "source branch '$HEAD_BRANCH' is fine"
+
   test:
     runs-on: ubuntu-22.04
     steps:

@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import { useStore } from '../lib/store';
 import { formatINR } from '../lib/format';
 import { onNotify, notify } from '../lib/toast';
-import { localStatus, isDesktop, loadAccountsFromDb } from '../lib/bridge';
+import { isDesktop, loadAccountsFromDb, loadLists } from '../lib/bridge';
 import { SidebarPanel } from './Sidebar';
 import Sidebar from './Sidebar';
 import Browser from './Browser';
@@ -64,27 +64,28 @@ export default function App(): React.ReactElement {
     void useStore.getState().refreshAuth();
   }, []);
 
-  // In the desktop app, source accounts from the local database once it has
-  // any; until then the persisted/seeded accounts stay in place, so a fresh
-  // install is not an empty screen.
+  // In the desktop app, pull the signed-in owner's accounts and lists from
+  // the local database. Re-runs on every sign-in: the previous owner's rows
+  // were cleared on the way in, and this is what puts the right ones back.
   useEffect(() => {
-    if (!isDesktop()) return;
+    if (!isDesktop() || !loggedIn) return;
     let cancelled = false;
     void (async () => {
-      const status = await localStatus();
-      if (cancelled || !status || status.error || status.accounts === 0) return;
       const res = await loadAccountsFromDb();
       if (cancelled || !res.ok || !res.accounts) {
         if (!cancelled && res.error) notify(`Database load failed: ${res.error}`, 'error');
         return;
       }
       useStore.getState().setAccounts(res.accounts);
-      notify(`Loaded ${res.accounts.length} accounts from the local database`, 'success');
+      const lists = await loadLists();
+      if (!cancelled && lists.ok && lists.lists) {
+        useStore.getState().setLists(lists.lists, lists.activeId);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [loggedIn]);
 
   // All hooks above are unconditional; the gate below is a pure render branch.
   if (!loggedIn) {

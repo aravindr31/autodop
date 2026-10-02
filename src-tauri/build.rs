@@ -40,7 +40,11 @@ fn main() {
             "package.json",
             "scraper.py",
         ])
-        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap_or(Path::new(".")))
+        .current_dir(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or(Path::new(".")),
+        )
         .output()
         .ok()
         .filter(|out| out.status.success())

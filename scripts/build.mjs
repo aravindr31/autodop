@@ -45,6 +45,16 @@ if (!existsSync(srcApp)) {
   process.exit(1);
 }
 
+// Ad-hoc code signature. Without any signature, a *downloaded* DMG is
+// quarantined and Gatekeeper reports the app as "damaged" rather than merely
+// "unidentified developer" — ad-hoc signing moves it back to the fixable case
+// (right-click → Open) without needing a Developer ID certificate.
+try {
+  run('codesign', ['--force', '--deep', '--sign', '-', srcApp]);
+} catch (error) {
+  console.warn('ad-hoc codesign failed — continuing; users may need xattr -cr', error);
+}
+
 
 const stage = mkdtempSync(join(tmpdir(), 'autodop-dmg-'));
 const stagedApp = join(stage, `${product}.app`);

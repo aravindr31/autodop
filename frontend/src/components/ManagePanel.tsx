@@ -17,7 +17,10 @@ import {
   importBackup,
   exportPortableBackup,
   importPortableBackup,
-  importAccountsPdf,
+  importAccountsPdfBytes,
+  importBackupBytes,
+  importPortableBackupBytes,
+  fileToBase64,
 } from '../lib/bridge';
 import type { LocalStatus, DopCredentialStatus, SavedCredentials, ScraperLocation } from '../lib/bridge';
 import { X, Plus, Trash, LogOut, Search, KeyRound, Terminal, Database, Save, Upload, FileText } from 'lucide-react';
@@ -450,12 +453,12 @@ function ScraperSection(): React.ReactElement {
 function BackupSection(): React.ReactElement {
   const { ready } = useDesktop();
   const [exportPath, setExportPath] = useState('');
-  const [importPath, setImportPath] = useState('');
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
 
   const [jsonPath, setJsonPath] = useState('');
-  const [jsonImportPath, setJsonImportPath] = useState('');
+  const [jsonImportFile, setJsonImportFile] = useState<File | null>(null);
   const [jsonPassword, setJsonPassword] = useState('');
   const [confirmingJson, setConfirmingJson] = useState(false);
 
@@ -480,15 +483,19 @@ function BackupSection(): React.ReactElement {
   };
 
   const runRestore = async () => {
+    if (!restoreFile) {
+      notify('Pick the backup .db file first', 'error');
+      return;
+    }
     setBusy(true);
-    const res = await importBackup(importPath.trim());
+    const res = await importBackupBytes(await fileToBase64(restoreFile));
     setBusy(false);
     setConfirmingRestore(false);
     if (!res.ok || !res.outcome) {
       notify(res.error ?? 'Restore failed', 'error');
       return;
     }
-    setImportPath('');
+    setRestoreFile(null);
     notify(
       `Restored ${res.outcome.accounts} accounts, ${res.outcome.lists} list(s)` +
         (res.outcome.has_credentials ? ' and the DOP password' : ''),
@@ -524,19 +531,19 @@ function BackupSection(): React.ReactElement {
   };
 
   const runJsonImport = async () => {
-    if (!jsonImportPath.trim() || !jsonPassword) {
-      notify('The file path and the login password it was made with are both required', 'error');
+    if (!jsonImportFile || !jsonPassword) {
+      notify('Pick the JSON file and enter the login password it was made with', 'error');
       return;
     }
     setBusy(true);
-    const res = await importPortableBackup(jsonImportPath.trim(), jsonPassword);
+    const res = await importPortableBackupBytes(await fileToBase64(jsonImportFile), jsonPassword);
     setBusy(false);
     setConfirmingJson(false);
     if (!res.ok || !res.outcome) {
       notify(res.error ?? 'Import failed', 'error');
       return;
     }
-    setJsonImportPath('');
+    setJsonImportFile(null);
     setJsonPassword('');
     notify(
       `Imported ${res.outcome.accounts} accounts, ${res.outcome.lists} list(s)` +
@@ -578,12 +585,11 @@ function BackupSection(): React.ReactElement {
             <Save className="h-4 w-4" />Back up now
           </Button>
           <div className="mt-3 border-t border-slate-100 pt-2">
-            <input
-              aria-label="Backup path to restore from"
-              value={importPath}
-              onChange={(e) => { setImportPath(e.currentTarget.value); setConfirmingRestore(false); }}
-              className={FIELD}
-              placeholder="Path to an autodop backup .db"
+            <FilePicker
+              accept=".db"
+              file={restoreFile}
+              onPick={(f) => { setRestoreFile(f); setConfirmingRestore(false); }}
+              emptyLabel="Choose a backup .db file…"
             />
             {confirmingRestore ? (
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -601,7 +607,7 @@ function BackupSection(): React.ReactElement {
               <Button
                 variant="secondary"
                 className="!mt-2 !w-full"
-                disabled={busy || !importPath.trim()}
+                disabled={busy || !restoreFile}
                 onClick={() => setConfirmingRestore(true)}
               >
                 <Upload className="h-4 w-4" />Restore from backup
@@ -636,12 +642,11 @@ function BackupSection(): React.ReactElement {
             >
               <Save className="h-4 w-4" />Export JSON
             </Button>
-            <input
-              aria-label="JSON backup path to import"
-              value={jsonImportPath}
-              onChange={(e) => { setJsonImportPath(e.currentTarget.value); setConfirmingJson(false); }}
-              className={FIELD + ' !mt-2'}
-              placeholder="Path to an autodop-export.json"
+            <FilePicker
+              accept=".json,application/json"
+              file={jsonImportFile}
+              onPick={(f) => { setJsonImportFile(f); setConfirmingJson(false); }}
+              emptyLabel="Choose an autodop-export.json…"
             />
             <input
               type="password"
@@ -667,7 +672,7 @@ function BackupSection(): React.ReactElement {
               <Button
                 variant="secondary"
                 className="!mt-2 !w-full"
-                disabled={busy || !jsonImportPath.trim() || !jsonPassword}
+                disabled={busy || !jsonImportFile || !jsonPassword}
                 onClick={() => setConfirmingJson(true)}
               >
                 <Upload className="h-4 w-4" />Import JSON
@@ -687,18 +692,58 @@ function BackupSection(): React.ReactElement {
 
 
 
+/** A styled file input — the OS picker, no typing paths. */
+function FilePicker({
+  accept,
+  file,
+  onPick,
+  emptyLabel,
+}: {
+  accept: string;
+  file: File | null;
+  onPick: (file: File | null) => void;
+  emptyLabel: string;
+}): React.ReactElement {
+  return (
+    <label
+      className={FIELD + ' flex cursor-pointer items-center gap-2 border-dashed hover:border-indigo-300'}
+    >
+      <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+      <span className="min-w-0 flex-1 truncate text-sm text-slate-600">
+        {file ? file.name : emptyLabel}
+      </span>
+      {file ? (
+        <button
+          type="button"
+          aria-label="Clear selection"
+          onClick={(e) => { e.preventDefault(); onPick(null); }}
+          className="px-1 text-slate-400 hover:text-slate-700"
+        >
+          ✕
+        </button>
+      ) : null}
+      <input
+        type="file"
+        accept={accept}
+        className="hidden"
+        onChange={(e) => onPick(e.currentTarget.files?.[0] ?? null)}
+      />
+    </label>
+  );
+}
+
 function PdfImportSection(): React.ReactElement {
   const { ready } = useDesktop();
-  const [path, setPath] = useState('');
+  const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
 
   const run = async () => {
-    if (!path.trim()) {
-      notify('Enter the full path to the PDF', 'error');
+    if (!file) {
+      notify('Pick the Deposit Accounts PDF first', 'error');
       return;
     }
     setBusy(true);
-    const res = await importAccountsPdf(path.trim());
+    const res = await importAccountsPdfBytes(await fileToBase64(file));
     setBusy(false);
     if (!res.ok || !res.report) {
       notify(res.error ?? 'Import failed', 'error');
@@ -710,7 +755,7 @@ function PdfImportSection(): React.ReactElement {
         (skipped_duplicates > 0 ? `, skipped ${skipped_duplicates} already present` : ''),
       'success',
     );
-    setPath('');
+    setFile(null);
     const accounts = await loadAccountsFromDb();
     if (accounts.ok && accounts.accounts) useStore.getState().setAccounts(accounts.accounts);
   };
@@ -721,17 +766,21 @@ function PdfImportSection(): React.ReactElement {
         <>
           <p className="mb-2 text-[11px] leading-relaxed text-slate-500">
             Print the agent portal&rsquo;s <strong>Deposit Accounts</strong> list to PDF, then
-            point here. Every row becomes an account — number, name and denomination; the
-            reference and customer numbers stay empty.
+            pick that file here. Every row becomes an account — number, name and
+            denomination; the reference and customer numbers stay empty.
           </p>
-          <input
-            aria-label="Path to the Deposit Accounts PDF"
-            value={path}
-            onChange={(e) => setPath(e.currentTarget.value)}
-            className={FIELD}
-            placeholder="/Users/you/Downloads/Department of Post Agent Login Deposit Accounts.pdf"
+          <FilePicker
+            accept=".pdf,application/pdf"
+            file={file}
+            onPick={setFile}
+            emptyLabel="Choose the Deposit Accounts PDF…"
           />
-          <Button variant="secondary" className="!mt-2 !w-full" disabled={busy} onClick={() => void run()}>
+          <Button
+            variant="secondary"
+            className="!mt-2 !w-full"
+            disabled={busy || !file}
+            onClick={() => void run()}
+          >
             <FileText className="h-4 w-4" />Import from PDF
           </Button>
         </>

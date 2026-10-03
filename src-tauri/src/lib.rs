@@ -1098,10 +1098,31 @@ fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, 
     if !source.is_file() {
         return Err(format!("{} is not a file", source.display()));
     }
-
     let text = pdf_extract::extract_text(&source.display().to_string())
         .map_err(|error| format!("could not read the PDF: {error}"))?;
+    import_pdf_text(app, &text)
+}
 
+/// Same import, from bytes the frontend read with a file picker — the picker
+/// gives content, not paths, so the payload arrives base64-wrapped and is
+/// written to a temp file for the extractor.
+#[tauri::command]
+fn import_accounts_pdf_bytes(
+    app: AppHandle,
+    data_base64: String,
+) -> Result<PdfImportReport, String> {
+    let bytes = base64_decode(&data_base64)?;
+    let temp = write_temp("autodop-import.pdf", &bytes)?;
+    let result = (|| {
+        let text = pdf_extract::extract_text(&temp.display().to_string())
+            .map_err(|error| format!("could not read the PDF: {error}"))?;
+        import_pdf_text(app, &text)
+    })();
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+fn import_pdf_text(app: AppHandle, text: &str) -> Result<PdfImportReport, String> {
     let owner = current_owner(&app)?;
     let store = open_store(&app)?;
 
@@ -1305,7 +1326,21 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
     if !source.exists() {
         return Err(format!("{} does not exist", source.display()));
     }
-    let snapshot = backup::inspect(&source).map_err(fs_hint)?;
+    restore_from_file(&app, &source)
+}
+
+/// Same restore, from bytes the frontend read with a file picker.
+#[tauri::command]
+fn import_backup_bytes(app: AppHandle, data_base64: String) -> Result<BackupOutcome, String> {
+    let bytes = base64_decode(&data_base64)?;
+    let temp = write_temp("autodop-restore.db", &bytes)?;
+    let result = restore_from_file(&app, &temp);
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+fn restore_from_file(app: &AppHandle, source: &Path) -> Result<BackupOutcome, String> {
+    let snapshot = backup::inspect(source).map_err(fs_hint)?;
     let live = store_path(&app)?;
 
     let safety = live.with_extension(format!("db.pre-restore-{}", compact_timestamp(now_secs())));
@@ -1342,6 +1377,24 @@ fn import_backup(app: AppHandle, path: String) -> Result<BackupOutcome, String> 
         has_credentials: snapshot.has_credentials,
         previous: Some(previous),
     })
+}
+
+/// Decode a base64 payload from the frontend (file pickers hand over bytes,
+/// which are wrapped because `invoke` speaks JSON).
+fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|error| format!("malformed file payload: {error}"))
+}
+
+/// A uniquely named scratch file holding `bytes`, for commands that receive
+/// content from a file picker but need a path (SQLite restore, PDF extract).
+fn write_temp(name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    let path = std::env::temp_dir().join(format!("{}-{}", compact_timestamp(now_secs()), name));
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    Ok(path)
 }
 
 fn fs_hint(error: String) -> String {
@@ -1402,7 +1455,31 @@ fn import_portable_backup(
 ) -> Result<BackupOutcome, String> {
     let source = expand_home(&path);
     let backup = backup::portable_read(&source, &login_password)?;
+    portable_import_run(app, &backup, &login_password)
+}
 
+/// Same import, from bytes the frontend read with a file picker.
+#[tauri::command]
+fn import_portable_backup_bytes(
+    app: AppHandle,
+    data_base64: String,
+    login_password: String,
+) -> Result<BackupOutcome, String> {
+    let bytes = base64_decode(&data_base64)?;
+    let temp = write_temp("autodop-import.json", &bytes)?;
+    let result = (|| {
+        let backup = backup::portable_read(&temp, &login_password)?;
+        portable_import_run(app, &backup, &login_password)
+    })();
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+fn portable_import_run(
+    app: AppHandle,
+    backup: &backup::PortableBackup,
+    login_password: &str,
+) -> Result<BackupOutcome, String> {
     let live = store_path(&app)?;
     let safety = live.with_extension(format!("db.pre-restore-{}", compact_timestamp(now_secs())));
     backup::export(&live, &safety).map_err(fs_hint)?;
@@ -1414,7 +1491,7 @@ fn import_portable_backup(
     if backup.credentials.is_some() {
         let key = unlocked_key(&app)
             .ok_or("Sign in first — the DOP password is re-encrypted with your login's key.")?;
-        backup::portable_import_credentials(&store, &owner, &backup, &login_password, &key)?;
+        backup::portable_import_credentials(&store, &owner, &backup, login_password, &key)?;
         has_credentials = true;
     }
     Ok(BackupOutcome {
@@ -1469,6 +1546,9 @@ pub fn run() {
             save_account,
             delete_account,
             import_accounts_pdf,
+            import_accounts_pdf_bytes,
+            import_backup_bytes,
+            import_portable_backup_bytes,
             export_backup,
             import_backup,
             export_portable_backup,

@@ -45,7 +45,25 @@ if (!python) {
 
 console.log(`Freezing scraper.py for ${OS}-${ARCH} with ${python}`);
 
-
+// The frozen binary must actually contain selenium and webdriver-manager —
+// on a clean CI runner the interpreter has neither, and a PyInstaller run
+// without them silently bakes a broken exe ("No module named 'selenium'"
+// at runtime on the target machine). Install whatever is missing.
+const required = ['pyinstaller', 'selenium', 'webdriver-manager'];
+const missing = required.filter((module) => {
+  try {
+    execFileSync(python, ['-c', `import ${module.replace(/-/g, '_')}`], { stdio: 'ignore' });
+    return false;
+  } catch {
+    return true;
+  }
+});
+if (missing.length > 0) {
+  console.log(`Installing into the sidecar interpreter: ${missing.join(', ')}…`);
+  execFileSync(python, ['-m', 'pip', 'install', '-q', ...missing], {
+    stdio: 'inherit',
+  });
+}
 
 try {
   execFileSync(python, ['-m', 'PyInstaller', '--version'], { stdio: 'ignore' });

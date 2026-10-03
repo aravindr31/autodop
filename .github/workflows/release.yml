@@ -15,9 +15,6 @@ on:
     - 'scripts/**'
     - 'backups/**'
 
-  pull_request:
-    branches: [ main ]
-
   workflow_dispatch:
 
 

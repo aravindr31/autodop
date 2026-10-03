@@ -1,7 +1,6 @@
-name: ci
+name: "CI Pipeline"
 
 on:
-
   pull_request:
     paths-ignore:
     - 'README.md'
@@ -10,7 +9,8 @@ on:
     - 'LICENSE'
     - '**/*.md'
     - 'docs/**'
-
+    - 'scripts/**'
+    - 'backups/**'
 jobs:
   pr-source:
     if: github.event_name == 'pull_request'

@@ -1,9 +1,8 @@
-name: release
+name: "Release Pipeline"
 
 on:
   push:
-    branches:
-    - main
+    branches: [ main ]
     paths-ignore:
     - 'README.md'
     - 'CHANGELOG.md'
@@ -13,6 +12,9 @@ on:
     - '.github/**'
     - 'docs/**'
     - '**/.*'
+    - 'scripts/**'
+    - 'backups/**'
+
   workflow_dispatch:
 
 
@@ -94,7 +96,7 @@ jobs:
       run: |
         git config user.name "aravindr-release-bot[bot]"
         git config user.email "release@users.noreply.github.com"
-        git add -A
+        git add VERSION CHANGELOG.md package.json frontend/package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
         git commit -m "chore(release): ${{ steps.bump.outputs.tag }} [skip ci]"
         git tag "${{ steps.bump.outputs.tag }}"
         git push origin "HEAD:main" --tags
@@ -170,7 +172,7 @@ jobs:
     - name: Release notes from the changelog entry
       shell: bash
       run: |
-        awk '/^## ${{ needs.version.outputs.tag }}$/ {flag=1; print; next} /^## v/ {flag=0} flag' CHANGELOG.md > release-notes.md
+        awk -v h="## ${{ needs.version.outputs.tag }}" '$0==h || index($0, h " ")==1 {flag=1; print; next} /^## v/ {flag=0} flag' CHANGELOG.md > release-notes.md
         test -s release-notes.md || echo "AutoDOP ${{ needs.version.outputs.tag }}" > release-notes.md
         cat release-notes.md
 

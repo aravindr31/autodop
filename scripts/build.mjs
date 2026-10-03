@@ -1,19 +1,5 @@
 #!/usr/bin/env node
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,12 +15,8 @@ const tauri = existsSync(join(root, 'node_modules', '.bin', 'tauri'))
 const tauriCmd = process.platform === 'win32' && existsSync(`${tauri}.cmd`) ? `${tauri}.cmd` : tauri;
 
 const run = (cmd, args, options = {}) =>
-  // Node blocks spawning .cmd/.bat shims directly (spawnSync EINVAL), so
-  // Windows routes through the shell.
+
   execFileSync(cmd, args, { stdio: 'inherit', cwd: root, shell: process.platform === 'win32', ...options });
-
-
-
 
 const isMac = process.platform === 'darwin';
 run(

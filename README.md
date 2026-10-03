@@ -91,39 +91,24 @@ login you trigger and ChromeDriver's one-time download.
   webview: it goes from Rust straight into the runner's argv.
 - A restore/import always keeps a safety copy of the replaced database.
 
-**Reporting a vulnerability.** Please do not open a public issue. Use
-[GitHub's private vulnerability reporting](../../security/advisories/new) on
-this repository, or contact the maintainer directly. Include the version
-(shown in-app as *This build* under Manage) and, if relevant, the run log with
-the password redacted.
+**Reporting a vulnerability.** Please do not open a public issue — see
+[SECURITY.md](SECURITY.md) for the private reporting path and the full trust
+model.
 
 ---
 
 ## Contributing
 
-PRs are welcome — the pipeline is built around them.
+PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide.
+The short version:
 
-**Rules of the road:**
-
-1. **Branch**: PRs must come from `feature/*`, `fix/*` or `hotfix/*`. CI
-   rejects PRs to `main` from any other branch.
-2. **Conventional commits** — every commit message starts with a type, because
-   the release pipeline reads them to decide the next version:
-
-   | Type | Version effect |
-   | --- | --- |
-   | `fix: …` | patch (0.6.1 → 0.6.2) |
-   | `feat: …` | minor (0.6.1 → 0.7.0) |
-   | `…!: …` or a `BREAKING CHANGE` footer | major (0.6.1 → 1.0.0) |
-   | `chore:` `docs:` `ci:` `refactor:` … | none on its own |
-
-   Merges containing none of `feat`/`fix`/breaking still release a patch, so
-   every merge to `main` ships a newer build.
-3. **No manual versions.** On merge to `main` CI runs the test suite, derives
-   the next version from the commit messages, writes `VERSION`, `CHANGELOG.md`
-   and all four version fields, tags `vX.Y.Z`, builds macOS/Windows/Linux from
-   that exact commit and publishes the release with the changelog section as
-   the notes. Merges touching only docs/workflows skip the release entirely.
+- PRs come from `feature/*` / `fix/*` / `hotfix/*` branches — CI rejects
+  anything else.
+- **Conventional commits** (`fix:` `feat:` `chore:` …) — the release pipeline
+  reads them: `fix` bumps the patch, `feat` the minor, `…!:` a major.
+- Merging to `main` ships: tests run, the version is derived from your
+  commits, and macOS/Windows/Linux installers land on the GitHub release with
+  the changelog as the notes.
 
 ### Development setup
 

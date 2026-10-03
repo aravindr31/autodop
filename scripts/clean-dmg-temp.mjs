@@ -5,12 +5,6 @@ import { join, resolve } from 'node:path';
 const dir = 'src-tauri/target/release/bundle/macos';
 const bundleDir = resolve('src-tauri/target/release/bundle');
 
-
-
-
-
-
-
 function detachStaleStagingVolumes() {
   let info;
   try {

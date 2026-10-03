@@ -1,21 +1,5 @@
 #!/usr/bin/env node
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -28,7 +12,6 @@ const git = (args) =>
   execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 
 const versionFile = join(root, 'VERSION');
-const current = readFileSync(versionFile, 'utf8').trim();
 const bumpOf = (version, part) => {
   const [major, minor, patch] = version.split('.').map(Number);
   if (part === 'major') return `${major + 1}.0.0`;
@@ -38,29 +21,32 @@ const bumpOf = (version, part) => {
 
 
 const lastTag = git(['tag', '--list', 'v*', '--sort=-v:refname']).split('\n')[0] || '';
+const current = lastTag ? lastTag.slice(1) : readFileSync(versionFile, 'utf8').trim();
 const range = lastTag ? `${lastTag}..HEAD` : 'HEAD';
-const commits = git(['log', '--format=%s%x09%b', range]).split('\n').filter(Boolean);
 
+const commits = git(['log', '--format=%s%x1f%b%x1e', range])
+  .split('\x1e')
+  .map((r) => r.trim())
+  .filter(Boolean);
+
+if (commits.length === 0) {
+  console.log(`nothing to release since ${lastTag}`);
+  process.exit(0);
+}
+
+const rank = { patch: 1, minor: 2, major: 3 };
 let part = null;
+const raise = (p) => { if (!part || rank[p] > rank[part]) part = p; };
+
 const groups = { feat: [], fix: [], other: [], breaking: [] };
-for (const line of commits) {
-  const [subject, ...body] = line.split('\t');
-  const breaking = /^(\w+)(\([^)]*\))?!:/.test(subject) || body.join('').includes('BREAKING CHANGE');
+for (const record of commits) {
+  const [subject, body = ''] = record.split('\x1f');
+  const breaking = /^(\w+)(\([^)]*\))?!:/.test(subject) || body.includes('BREAKING CHANGE');
   const type = /^(feat|fix|chore|docs|ci|refactor|perf|test|style|build)(\([^)]*\))?:/.exec(subject)?.[1] ?? 'other';
-  if (breaking) {
-    groups.breaking.push(subject);
-    part = 'major';
-    continue;
-  }
-  if (type === 'feat') {
-    groups.feat.push(subject);
-    part ??= 'minor';
-  } else if (type === 'fix') {
-    groups.fix.push(subject);
-    part ??= 'patch';
-  } else {
-    groups.other.push(subject);
-  }
+  if (breaking) { groups.breaking.push(subject); raise('major'); continue; }
+  if (type === 'feat') { groups.feat.push(subject); raise('minor'); }
+  else if (type === 'fix') { groups.fix.push(subject); raise('patch'); }
+  else groups.other.push(subject);
 }
 
 const next = bumpOf(current, part ?? 'patch');
@@ -99,21 +85,17 @@ if (dry) {
   console.log(section.join('\n'));
   process.exit(0);
 }
+if (dry) {
+  console.log(section.join('\n'));
+  process.exit(0);
+}
+
+execFileSync('node', [join(root, 'scripts/bump-version.mjs'), next], {
+  cwd: root,
+  stdio: 'inherit',
+});
 
 writeFileSync(versionFile, `${next}\n`);
 writeFileSync(changelogPath, changelog);
-
-
-const targets = [
-  { file: 'src-tauri/tauri.conf.json', pattern: /("version"\s*:\s*")[^"]+(")/ },
-  { file: 'src-tauri/Cargo.toml', pattern: /(^version\s*=\s*")[^"]+(")/m },
-  { file: 'package.json', pattern: /("version"\s*:\s*")[^"]+(")/ },
-  { file: 'frontend/package.json', pattern: /("version"\s*:\s*")[^"]+(")/ },
-];
-for (const { file, pattern } of targets) {
-  const path = join(root, file);
-  const before = readFileSync(path, 'utf8');
-  writeFileSync(path, before.replace(new RegExp(pattern.source, `${pattern.flags}g`), `$1${next}$2`));
-  console.log(`  ${file} → ${next}`);
-}
+console.log(`\nVERSION → ${next}; CHANGELOG.md updated.`);
 console.log(`\nVERSION → ${next}; CHANGELOG.md updated.`);

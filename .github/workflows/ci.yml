@@ -2,15 +2,12 @@ name: "CI Pipeline"
 
 on:
   pull_request:
-    paths-ignore:
-    - 'README.md'
-    - 'CHANGELOG.md'
-    - 'VERSION'
-    - 'LICENSE'
-    - '**/*.md'
-    - 'docs/**'
-    - 'scripts/**'
-    - 'backups/**'
+    paths:
+    - 'frontend/**'
+    - 'src-tauri/**'
+    - 'package.json'
+    - 'scraper.py'
+
 jobs:
   pr-source:
     if: github.event_name == 'pull_request'

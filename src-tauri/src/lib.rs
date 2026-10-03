@@ -1098,9 +1098,8 @@ fn import_accounts_pdf(app: AppHandle, path: String) -> Result<PdfImportReport, 
     if !source.is_file() {
         return Err(format!("{} is not a file", source.display()));
     }
-    let text =
-        pdf_extract::extract_text(&source.display().to_string())
-            .map_err(|error| format!("could not read the PDF: {error}"))?;
+    let text = pdf_extract::extract_text(&source.display().to_string())
+        .map_err(|error| format!("could not read the PDF: {error}"))?;
     import_pdf_text(app, &text)
 }
 
@@ -1392,11 +1391,7 @@ fn base64_decode(data: &str) -> Result<Vec<u8>, String> {
 /// A uniquely named scratch file holding `bytes`, for commands that receive
 /// content from a file picker but need a path (SQLite restore, PDF extract).
 fn write_temp(name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
-    let path = std::env::temp_dir().join(format!(
-        "{}-{}",
-        compact_timestamp(now_secs()),
-        name
-    ));
+    let path = std::env::temp_dir().join(format!("{}-{}", compact_timestamp(now_secs()), name));
     std::fs::write(&path, bytes)
         .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
     Ok(path)

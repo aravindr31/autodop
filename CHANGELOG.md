@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.7 — 2026-10-03
+
+### Fixes
+
+- spawn the tauri CLI through the shell on Windows
+
+### Other
+
+- Merge pull request #8 from aravindr31/fix/windows-build-fix
+- BatchFile CVE fix); Windows runners need shell:true.
+
 ## v0.7.6 — 2026-10-03
 
 ### Fixes

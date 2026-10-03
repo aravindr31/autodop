@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.8.0 — 2026-10-03
+
+### Features
+
+- guided first-run import and file pickers
+
+### Fixes
+
+- smoke-test the frozen runner before shipping it
+- install selenium into the sidecar before freezing
+
+### Other
+
+- Merge pull request #13 from aravindr31/feature/guided-import
+- cargo fmt
+- Merge pull request #12 from aravindr31/fix/sidecar-selenium
+
 ## v0.7.9 — 2026-10-03
 
 ### Fixes

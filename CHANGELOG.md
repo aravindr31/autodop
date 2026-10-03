@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.9 — 2026-10-03
+
+### Fixes
+
+- ad-hoc codesign the macOS app before packaging
+- update CI workflows to include .github directory in CI and remove from release
+- include .github directory in release workflow paths
+- update CI and release workflows to include relevant paths
+
+### Other
+
+- Merge pull request #11 from aravindr31/fix/windows-build-fix
+- Merge branch 'main' into fix/windows-build-fix
+- Merge pull request #10 from aravindr31/fix/windows-build-fix
+- Delete .DS_Store
+- CONTRIBUTING and SECURITY policies
+- app-first README and a noncommercial license
+
 ## v0.7.8 — 2026-10-03
 
 ### Fixes

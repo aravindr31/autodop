@@ -102,6 +102,22 @@ mkdirSync(binariesDir, { recursive: true });
 copyFileSync(built, output);
 if (process.platform !== 'win32') chmodSync(output, 0o755);
 
+// Smoke test the frozen binary: scraper.py exits non-zero on missing
+// arguments before touching the portal, so running it bare must fail with a
+// usage error — anything about imports means selenium did not make it into
+// the freeze.
+let probe = '';
+try {
+  execFileSync(output, [], { stdio: 'pipe', encoding: 'utf8', timeout: 60_000 });
+} catch (error) {
+  probe = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+  if (/No module named|ModuleNotFoundError|ImportError/i.test(probe)) {
+    console.error(`The frozen runner is missing imports:\n${probe}`);
+    process.exit(1);
+  }
+}
+console.log('frozen runner smoke test: imports resolve');
+
 const size = (statSync(output).size / 1024 / 1024).toFixed(1);
 console.log(`\nWrote ${output} (${size} MB)`);
 console.log('Now: npm run build   — the app will prefer this over the bundled .py');

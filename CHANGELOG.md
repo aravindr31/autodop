@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.7.8 — 2026-10-03
+
+### Fixes
+
+- remove pull request trigger from release workflow
+- dummy commit
+- update CI and release workflows, remove unused settings, and clean up scripts
+
+### Other
+
+- Merge pull request #9 from aravindr31/fix/windows-build-fix
+- Merge branch 'main' into fix/windows-build-fix
+- Merge branch 'main' into fix/windows-build-fix
+
 ## v0.7.7 — 2026-10-03
 
 ### Fixes

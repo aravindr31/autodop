@@ -290,6 +290,65 @@ export async function importAccountsPdf(
   }
 }
 
+/** Base64-encode a picked file so it can cross `invoke` (JSON) to Rust. */
+export async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/** Import a Deposit-Accounts PDF the user picked with a file picker. */
+export async function importAccountsPdfBytes(
+  dataBase64: string,
+): Promise<{ ok: boolean; error?: string; report?: PdfImportReport }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return {
+      ok: true,
+      report: await invoke<PdfImportReport>('import_accounts_pdf_bytes', { dataBase64 }),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Restore a .db backup the user picked with a file picker. */
+export async function importBackupBytes(
+  dataBase64: string,
+): Promise<{ ok: boolean; error?: string; outcome?: BackupOutcome }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return {
+      ok: true,
+      outcome: await invoke<BackupOutcome>('import_backup_bytes', { dataBase64 }),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Import a portable JSON backup the user picked with a file picker. */
+export async function importPortableBackupBytes(
+  dataBase64: string,
+  loginPassword: string,
+): Promise<{ ok: boolean; error?: string; outcome?: BackupOutcome }> {
+  if (!isDesktop()) return { ok: false, error: 'Desktop app not available.' };
+  try {
+    return {
+      ok: true,
+      outcome: await invoke<BackupOutcome>('import_portable_backup_bytes', {
+        dataBase64,
+        loginPassword,
+      }),
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 export async function logoutDesktop(): Promise<void> {
   if (!isDesktop()) return;

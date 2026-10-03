@@ -3,7 +3,8 @@ import type { Account } from '../lib/types';
 import { useStore } from '../lib/store';
 import { matchesQuery, denominationLabel } from '../lib/format';
 import { notify } from '../lib/toast';
-import { Search, Check, Plus, LayoutGrid, Columns2, Rows3, Table2 } from 'lucide-react';
+import { importAccountsPdfBytes, fileToBase64, loadAccountsFromDb } from '../lib/bridge';
+import { Search, Check, Plus, LayoutGrid, Columns2, Rows3, Table2, FileText, Download } from 'lucide-react';
 import { Button, EmptyState, Pill } from './ui';
 
 const PAGE_SIZES = [50, 100, 250];
@@ -93,6 +94,91 @@ function AccountCard({ account }: { account: Account }): React.ReactElement {
         <span>Ref {account.Ref_Number || '—'}</span>
       </div>
       <div className="mt-2.5 flex items-center justify-end">{action}</div>
+    </div>
+  );
+}
+
+/**
+ * What a first-time user sees: no accounts yet, so point them at the agent
+ * portal's Deposit-Accounts printout and let them import it right here.
+ */
+function ImportOnboarding(): React.ReactElement {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    if (!file) return;
+    setBusy(true);
+    const res = await importAccountsPdfBytes(await fileToBase64(file));
+    setBusy(false);
+    if (!res.ok || !res.report) {
+      notify(res.error ?? 'Import failed', 'error');
+      return;
+    }
+    const { imported, skipped_duplicates } = res.report;
+    notify(
+      `Imported ${imported} account(s)` +
+        (skipped_duplicates > 0 ? `, skipped ${skipped_duplicates} already present` : ''),
+      'success',
+    );
+    setFile(null);
+    const accounts = await loadAccountsFromDb();
+    if (accounts.ok && accounts.accounts) useStore.getState().setAccounts(accounts.accounts);
+  };
+
+  return (
+    <div className="mx-auto max-w-xl rounded-2xl border border-indigo-200 bg-white p-5 shadow-sm">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 text-white">
+          <Download className="h-4 w-4" />
+        </span>
+        <h2 className="text-sm font-semibold text-slate-800">
+          Bring in your account data
+        </h2>
+      </div>
+      <ol className="mb-3 list-decimal space-y-1.5 pl-5 text-xs leading-relaxed text-slate-600">
+        <li>
+          Sign in at{' '}
+          <a
+            href="https://dopagent.indiapost.gov.in/"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-indigo-600 underline-offset-2 hover:underline"
+          >
+            dopagent.indiapost.gov.in
+          </a>{' '}
+          with your agent credentials.
+        </li>
+        <li>
+          Open <strong>Deposits → Account</strong> (the Deposit Accounts list) and use
+          the print/save option to download it as a <strong>PDF</strong>.
+        </li>
+        <li>Pick that PDF below — every row becomes an account in AutoDOP.</li>
+      </ol>
+      <label className="flex w-full cursor-pointer items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white py-2.5 pl-3 pr-3 text-sm text-slate-600 hover:border-indigo-300">
+        <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+        <span className="min-w-0 flex-1 truncate">
+          {file ? file.name : 'Choose the Deposit Accounts PDF…'}
+        </span>
+        <input
+          type="file"
+          accept=".pdf,application/pdf"
+          className="hidden"
+          onChange={(e) => setFile(e.currentTarget.files?.[0] ?? null)}
+        />
+      </label>
+      <Button
+        variant="primary"
+        className="!mt-3 !w-full"
+        disabled={busy || !file}
+        onClick={() => void run()}
+      >
+        <Plus className="h-4 w-4" />Import accounts
+      </Button>
+      <p className="mt-3 text-[11px] leading-snug text-slate-400">
+        Prefer moving an existing setup over? Manage → Backup &amp; restore imports a
+        portable JSON backup from another machine.
+      </p>
     </div>
   );
 }
@@ -214,7 +300,9 @@ export default function Browser(): React.ReactElement {
         </div>
       </div>
 
-      {matched.length === 0 ? (
+      {accounts.length === 0 ? (
+        <ImportOnboarding />
+      ) : matched.length === 0 ? (
         <EmptyState
           title="No accounts match your search"
           hint="Try a name, account number, CNumber or reference number, or add a new account."

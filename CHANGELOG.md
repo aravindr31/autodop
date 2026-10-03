@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.6 — 2026-10-03
+
+### Fixes
+
+- update release workflow to use app token and improve output handling
+
+### Other
+
+- Merge pull request #7 from aravindr31/fix/frontend-list-ui
+- dummy commit
+- Merge pull request #6 from aravindr31/fix/cicd
+
 ## v0.7.0 — 2026-10-02
 
 ### Features
